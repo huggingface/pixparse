@@ -2,3 +2,4 @@ torch
 timm
 transformers
 webdataset
+simple-parsing

@@ -30,7 +30,7 @@ from pixparse.data import preprocess_ocr_anno, preprocess_text_anno
 @dataclass
 class TaskCrullerPretrainConfig:
     model: ModelCfg = ModelCfg()
-    # tokenizer = ?
+    # tokenizer = ?  # FIXME tokenizer config needed?
     opt: OptimizationCfg = OptimizationCfg()
     dtype: Optional[str] = None
     amp: bool = True
@@ -107,9 +107,9 @@ class TaskCrullerPretrain(Task):
         self.eval_metrics = {}
 
         # FIXME improve naming 'count', 'index'?
-        self.step = 0
-        self.interval = 0
-        self.interval_batch = 0
+        self.step = 0  # step (aka update) count
+        self.interval = 0  # interval (aka epoch or restorable period-between-checkpoints)
+        self.interval_batch = 0  # batch count in current interval
 
     def train_setup(
             self,

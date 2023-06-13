@@ -32,6 +32,7 @@ classifiers = [
 dependencies = [
     "timm",
     "transformers",
+    "simple-parsing",
     "chug",
 ]
 dynamic = ["version"]

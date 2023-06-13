@@ -13,5 +13,5 @@ The training objectives and pretraining datasets will also be inspired by the as
 
 2023-06-12
 * It performs train steps on image-text datasets (objective too hard to learn anything w/o text in image)
-  * `python -m pixparse.app.train --train.source "/data/cc12m/cc12m-train-{0000..xxxx}.tar" --train.batch-size 8 --train.num-samples 10000000 --learning-rate 1e-4 --clip-grad-value 1.0 --clip-grad-mode norm`
+  * `python -m pixparse.app.train --train.source "/data/cc12m/cc12m-train-{0000..xxxx}.tar" --train.batch-size 8 --train.num-samples 10000000 --learning-rate 1e-4 --clip-grad-value 1.0 --clip-grad-mode norm --grad-accum-steps 4`
 * Next step, trial image + ocr anno dataset 
