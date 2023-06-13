@@ -52,6 +52,8 @@ class TaskCrullerPretrain(Task):
         self.model = Cruller(cfg.model)
         self.model.to(device_env.device)
         self.loss = nn.CrossEntropyLoss(ignore_index=-100)
+        # FIXME setup DDP / FSDP
+        self.has_no_sync = False
 
         # preprocessors cross both the task/model & dataset domain,
         # created within task here and passed to data loaders
@@ -104,8 +106,10 @@ class TaskCrullerPretrain(Task):
         self.train_metrics = {}
         self.eval_metrics = {}
 
+        # FIXME improve naming 'count', 'index'?
         self.step = 0
         self.interval = 0
+        self.interval_batch = 0
 
     def train_setup(
             self,
@@ -127,6 +131,7 @@ class TaskCrullerPretrain(Task):
             warmup_epochs=num_warmup_intervals,
             num_epochs=num_intervals,
         )
+        self.scheduler.step_update(0)
 
         if self.cfg.amp:
             self.scaler = timm.utils.NativeScaler()
@@ -137,7 +142,8 @@ class TaskCrullerPretrain(Task):
 
     def train_interval_start(self):
         # epoch / interval start hook, useful?
-        pass
+        self.optimizer.zero_grad()
+        self.interval_batch = 0
 
     def train_interval_end(self):
         # epoch / interval end hook, useful?
@@ -151,37 +157,57 @@ class TaskCrullerPretrain(Task):
         text_input = text_input[:, :-1].to(self.device_env.device)
         text_target = text_target[:, 1:].to(self.device_env.device)
 
-        with self.autocast():
-            output = self.model(image_input, text_input)
-            logits = output['logits']
-            loss = self.loss(
-                logits.view(-1, self.vocab_size),
-                text_target.view(-1),
-            )
+        accum_steps = self.cfg.opt.grad_accum_steps
+        need_update = (self.interval_batch + 1) % accum_steps == 0
 
-        need_update = True
-        if self.scaler is not None:
-            self.scaler(
-                loss,
-                self.optimizer,
-                clip_grad=self.cfg.opt.clip_grad_value,
-                clip_mode=self.cfg.opt.clip_grad_mode,
-                parameters=self.model.parameters(),
-                need_update=need_update,
-            )
+        def _forward():
+            with self.autocast():
+                output = self.model(image_input, text_input)
+                logits = output['logits']
+                loss = self.loss(
+                    logits.view(-1, self.vocab_size),
+                    text_target.view(-1),
+                )
+            if accum_steps > 1:
+                loss /= accum_steps
+            return loss
+
+        def _backward(_loss):
+            if self.scaler is not None:
+                self.scaler(
+                    _loss,
+                    self.optimizer,
+                    clip_grad=self.cfg.opt.clip_grad_value,
+                    clip_mode=self.cfg.opt.clip_grad_mode,
+                    parameters=self.model.parameters(),
+                    need_update=need_update,
+                )
+            else:
+                _loss.backward()
+                if need_update:
+                    if self.cfg.opt.clip_grad_value is not None:
+                        timm.utils.dispatch_clip_grad(
+                            self.model.parameters(),
+                            value=self.cfg.opt.clip_grad_value,
+                            mode=self.cfg.opt.clip_grad_mode,
+                        )
+                    self.optimizer.step()
+
+        if self.has_no_sync and not need_update:
+            with self.model.no_sync():
+                loss = _forward()
+                _backward(loss)
         else:
-            loss.backward()
-            if need_update:
-                if self.cfg.opt.clip_grad_value is not None:
-                    timm.utils.dispatch_clip_grad(
-                        self.model.parameters(),
-                        value=self.cfg.opt.clip_grad_value,
-                        mode=self.cfg.opt.clip_grad_mode,
-                    )
-                self.optimizer.step()
+            loss = _forward()
+            _backward(loss)
 
-        self.scheduler.step_update(self.step)
+        self.interval_batch += 1
+        if not need_update:
+            return result
+
         self.step += 1
+        self.scheduler.step_update(self.step)
+        self.optimizer.zero_grad()
 
         if self.step % 100 == 0:
             print(self.step, loss.item())
