@@ -70,6 +70,7 @@ def main():
         is_train=True,
         image_preprocess=task.image_preprocess_train,
         anno_preprocess=task.anno_preprocess_train,
+        world_size=device_env.world_size,
     )
     if data_cfg.eval is not None:
         loaders['eval'] = create_loader(
@@ -77,6 +78,7 @@ def main():
             is_train=False,
             image_preprocess=task.image_preprocess_eval,
             anno_preprocess=task.anno_preprocess_eval,
+            #world_size=device_env.world_size
         )
 
     task.train_setup(

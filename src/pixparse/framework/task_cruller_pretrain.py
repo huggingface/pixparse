@@ -37,6 +37,18 @@ class TaskCrullerPretrainConfig:
 
 
 class TaskCrullerPretrain(Task):
+    """ Cruller Pretraining Task
+
+    NOTES:
+      * all task code is currently here w/ nothing in base class but interface
+      * we will want to pull out bits that are common to other tasks as we proceed
+         by pushing into base classe(s), stand-alone fn / helper classes, etc.
+      * to setup schedule we need info from data-pipeline re samples, etc so our call sequence is:
+        * Task() -- task __init__() called for instance, setup what we can
+        * Initialize data-pipeline (external to Task) to get batch / step count
+        * Call train_setup() to pass this info back to Task and finish setting up optimizer / scheduler
+        * Proceed to train by interval_start()/train_step() * N/interval_end(), eval_step(), etc
+    """
     def __init__(
             self,
             cfg: TaskCrullerPretrainConfig,
@@ -49,10 +61,8 @@ class TaskCrullerPretrain(Task):
         self.prompt_end_token = self.task_start_token
         self.max_position_embeddings = cfg.model.text_decoder.max_length
 
-        self.model = Cruller(cfg.model)
-        self.model.to(device_env.device)
+        self.model = Cruller(cfg.model)  # FIXME would be good to defer weight init here
         self.loss = nn.CrossEntropyLoss(ignore_index=-100)
-        # FIXME setup DDP / FSDP
         self.has_no_sync = False
 
         # preprocessors cross both the task/model & dataset domain,
@@ -117,6 +127,23 @@ class TaskCrullerPretrain(Task):
             num_warmup_intervals: int,
             num_steps_per_interval: int,
     ):
+        # FIXME currently thinking moving to device, setup DDP / FSDP makes sense
+        # in setup here vs in __init__(). For __init__ need the model structure to
+        # instantiate / setup tokenizer, other aspects. I don't think we need to init
+        # weights / move to device until here.
+        device = self.device_env.device
+        self.model.to(device)
+
+        if self.device_env.world_size > 1:
+            # NOTE: the plan is to add option for FSDP w/ HYBRID_SHARD strategy to extend
+            # model size capacity beyond DDP w/o overloading HF cluster NCCL throughput.
+            self.model = torch.nn.parallel.DistributedDataParallel(
+                self.model,
+                device_ids=[device],
+                static_graph=True,
+            )
+            self.has_no_sync = hasattr(self.model, 'no_sync')
+
         self.optimizer = create_optimizer_v2(
             self.model,
             self.cfg.opt.optimizer,
@@ -135,7 +162,7 @@ class TaskCrullerPretrain(Task):
 
         if self.cfg.amp:
             self.scaler = timm.utils.NativeScaler()
-            self.autocast = partial(torch.autocast, device_type='cuda', dtype=self.cfg.dtype)
+            self.autocast = partial(torch.autocast, device_type=device.type, dtype=self.cfg.dtype)
         else:
             self.scaler = None
             self.autocast = nullcontext

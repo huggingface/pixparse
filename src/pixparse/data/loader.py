@@ -8,7 +8,9 @@ def create_loader(
         cfg: DatasetCfg,
         is_train: bool,
         image_preprocess,
-        anno_preprocess=None,
+        anno_preprocess,
+        seed: int = 0,
+        world_size: int = 1,
 ):
     decoder = create_doc_anno_pipe(
         image_preprocess=image_preprocess,
@@ -22,6 +24,9 @@ def create_loader(
         decoder,
         is_train=is_train,
         num_samples=cfg.num_samples,
+        workers=cfg.num_workers,
         batch_size=cfg.batch_size,
+        seed=seed,
+        world_size=world_size,
     )
     return loader

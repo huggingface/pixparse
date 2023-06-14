@@ -13,6 +13,7 @@ class DatasetCfg:
     source: str
     num_samples: int
     batch_size: int
+    num_workers: int = 4
 
 
 @dataclass
