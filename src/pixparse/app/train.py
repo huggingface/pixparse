@@ -86,7 +86,8 @@ def main():
         num_warmup_intervals=1,
         num_steps_per_interval=loaders['train'].num_batches,
     )
-    print(task)
+    if device_env.is_primary():
+        print(task)
 
     train(
         train_cfg,

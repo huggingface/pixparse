@@ -237,7 +237,8 @@ class TaskCrullerPretrain(Task):
         self.optimizer.zero_grad()
 
         if self.step % 100 == 0:
-            print(self.step, loss.item())
+            # FIXME temporary debugging print, need to support proper logger + tb + wandb
+            print(self.step, loss.item(), self.device_env.global_rank, flush=True)
 
         return result
 

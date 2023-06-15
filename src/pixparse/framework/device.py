@@ -87,11 +87,14 @@ class DeviceEnv:
             self.local_rank = int(init_local_rank)
             is_slurm = 'SLURM_PROCID' in os.environ
             if 'SLURM_PROCID' in os.environ:
+                # os.environ['LOCAL_RANK'] = str(init_local_rank)
+                # os.environ['RANK'] = str(init_global_rank)
+                # os.environ['WORLD_SIZE'] = str(init_world_size)
                 torch.distributed.init_process_group(
                     backend=init_dist_backend,
                     init_method=init_dist_url,
                     world_size=init_world_size,
-                    rank=init_local_rank,
+                    rank=init_global_rank,
                 )
             else:
                 torch.distributed.init_process_group(
