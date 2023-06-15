@@ -14,10 +14,7 @@ import timm.utils
 from timm.optim import create_optimizer_v2
 from timm.scheduler import create_scheduler_v2
 
-from . import OptimizationCfg
-from .task import Task
-
-from pixparse.framework.device import DeviceEnv
+from pixparse.framework import OptimizationCfg, Task, DeviceEnv
 from pixparse.models import Cruller, ModelCfg
 from pixparse.data import preprocess_ocr_anno, preprocess_text_anno
 

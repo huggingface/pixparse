@@ -5,8 +5,8 @@ import simple_parsing
 from simple_parsing import ArgumentParser
 
 from pixparse.data import DataCfg, create_loader
-from pixparse.framework import DeviceEnv, Task, TaskCrullerPretrain, TaskCrullerPretrainConfig, \
-    train_one_interval, evaluate
+from pixparse.framework import DeviceEnv, Task, train_one_interval, evaluate
+from pixparse.task import TaskCrullerPretrain, TaskCrullerPretrainConfig
 
 
 @dataclass
