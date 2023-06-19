@@ -77,7 +77,7 @@ def main():
         date_str = datetime.now().strftime("%Y_%m_%d-%H_%M_%S")
         if device_env.world_size > 1:
             # sync date_str from master to all ranks
-            date_str = device_env.broadcast_object(args, date_str)
+            date_str = device_env.broadcast_object(date_str)
         experiment = '-'.join([
             date_str,
             f"model_{model_name_safe}",
