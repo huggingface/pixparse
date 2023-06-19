@@ -116,3 +116,17 @@ class DeviceEnv:
             self.world_size = 1
             self.global_rank = 0
 
+    def broadcast_object(self, obj, src=0):
+        # broadcast a pickle-able python object from rank-0 to all ranks
+        if self.global_rank == src:
+            objects = [obj]
+        else:
+            objects = [None]
+        dist.broadcast_object_list(objects, src=src)
+        return objects[0]
+
+    def all_gather_object(self, obj, dst=0):
+        # gather a pickle-able python object across all ranks
+        objects = [None for _ in range(self.world_size)]
+        dist.all_gather_object(objects, obj)
+        return objects

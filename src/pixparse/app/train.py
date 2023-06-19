@@ -1,19 +1,28 @@
-from dataclasses import dataclass
+import logging
+import os
+from dataclasses import dataclass, replace
+from datetime import datetime
 from typing import Optional
 
 import simple_parsing
 from simple_parsing import ArgumentParser
 
+import torch
+
 from pixparse.data import DataCfg, create_loader
-from pixparse.framework import DeviceEnv, Task, train_one_interval, evaluate
+from pixparse.framework import DeviceEnv, Task, Monitor, train_one_interval, evaluate, setup_logging
 from pixparse.task import TaskCrullerPretrain, TaskCrullerPretrainConfig
+
+_logger = logging.getLogger('train')
 
 
 @dataclass
 class TrainCfg:
     experiment: Optional[str] = None  # experiment name, auto-generated if None or required?
     output_dir: str = './output'
+    log_filename: str = 'out.log'
     checkpoint_dir: Optional[str] = None  # default output_dir/checkpoints
+
     # TODO
     # resume -- resume experiment from location, mode, etc
     # wandb -- wandb config
@@ -22,7 +31,7 @@ class TrainCfg:
 
 def train(
         cfg: TrainCfg,
-        task: Task,
+        task: TaskCrullerPretrain,  # FIXME define common functionality in interface
         loaders,
 ):
     intervals = 100
@@ -41,6 +50,7 @@ def train(
 
         # save checkpoint
         # checkpointer.save(task, metrics, interval)
+        task.save_checkpoint(os.path.join(cfg.checkpoint_dir, f'checkpoint-{i}.pt'))
 
 
 parser = ArgumentParser(
@@ -55,13 +65,57 @@ parser.add_arguments(DataCfg, dest='data')
 
 def main():
     args = parser.parse_args()
-    train_cfg = args.train
-    task_cfg = args.task
+    train_cfg: TrainCfg = args.train
+    task_cfg: TaskCrullerPretrainConfig = args.task
 
     device_env = DeviceEnv()
     print(device_env)
 
-    task = TaskCrullerPretrain(task_cfg, device_env)
+    # get the name of the experiments
+    if train_cfg.experiment is None:
+        model_name_safe = task_cfg.model.name.replace('/', '-')
+        date_str = datetime.now().strftime("%Y_%m_%d-%H_%M_%S")
+        if device_env.world_size > 1:
+            # sync date_str from master to all ranks
+            date_str = device_env.broadcast_object(args, date_str)
+        experiment = '-'.join([
+            date_str,
+            f"model_{model_name_safe}",
+        ])
+        train_cfg = replace(train_cfg, experiment=experiment)
+
+    resume_latest = False  # train_cfg.resume == 'latest'
+    experiment_path = os.path.join(train_cfg.output_dir, train_cfg.experiment)
+    log_path = None
+    if device_env.is_primary():
+        os.makedirs(experiment_path, exist_ok=True)
+        log_path = os.path.join(experiment_path, train_cfg.log_filename)
+        if os.path.exists(log_path) and not resume_latest:
+            print(
+                "Error. Experiment already exists. Use --experiment {} to specify a new experiment."
+            )
+            return -1
+
+    # Setup text logger
+    setup_logging(log_path)
+    monitor = Monitor(
+        train_cfg.experiment,
+        output_dir=experiment_path,
+        # FIXME pass wandb / tb paths and enables
+        output_enabled=device_env.is_primary(),
+    )
+
+    checkpoint_dir = train_cfg.checkpoint_dir or os.path.join(experiment_path, 'checkpoints')
+    os.makedirs(checkpoint_dir, exist_ok=True)
+    train_cfg = replace(train_cfg, checkpoint_dir=checkpoint_dir)
+    if device_env.is_primary():
+        _logger.info(train_cfg)
+
+    task = TaskCrullerPretrain(
+        task_cfg,
+        device_env,
+        monitor,
+    )
 
     data_cfg: DataCfg = args.data
     loaders = {}
@@ -87,7 +141,7 @@ def main():
         num_steps_per_interval=loaders['train'].num_batches,
     )
     if device_env.is_primary():
-        print(task)
+        _logger.info(task)
 
     train(
         train_cfg,

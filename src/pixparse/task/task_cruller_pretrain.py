@@ -14,7 +14,7 @@ import timm.utils
 from timm.optim import create_optimizer_v2
 from timm.scheduler import create_scheduler_v2
 
-from pixparse.framework import OptimizationCfg, Task, DeviceEnv
+from pixparse.framework import OptimizationCfg, Task, DeviceEnv, Monitor
 from pixparse.models import Cruller, ModelCfg
 from pixparse.data import preprocess_ocr_anno, preprocess_text_anno
 
@@ -50,10 +50,12 @@ class TaskCrullerPretrain(Task):
             self,
             cfg: TaskCrullerPretrainConfig,
             device_env: DeviceEnv,
+            monitor: Monitor = None,
     ):
         super().__init__()
         self.cfg = cfg
         self.device_env = device_env
+        self.monitor = monitor
         self.task_start_token = '<s_pretrain>'
         self.prompt_end_token = self.task_start_token
         self.max_position_embeddings = cfg.model.text_decoder.max_length
@@ -234,8 +236,12 @@ class TaskCrullerPretrain(Task):
         self.optimizer.zero_grad()
 
         if self.step % 100 == 0:
-            # FIXME temporary debugging print, need to support proper logger + tb + wandb
-            print(self.step, loss.item(), self.device_env.global_rank, flush=True)
+            self.monitor.log_step(
+                'train',
+                step_idx=self.step,
+                interval=self.interval,
+                loss=loss.item(),
+            )
 
         return result
 
@@ -254,6 +260,10 @@ class TaskCrullerPretrain(Task):
 
     def load_state_dict(self, state_dict):
         pass
+
+    def save_checkpoint(self, filename):
+        with open(filename) as f:
+            torch.save(self.state_dict(), f)
 
     def __repr__(self):
         outputs = [

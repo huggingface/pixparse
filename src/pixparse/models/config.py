@@ -20,5 +20,6 @@ class TextDecoderCfg:
 
 @dataclass
 class ModelCfg:
+    name: str = 'cruller-base'
     image_encoder: ImageEncoderCfg = ImageEncoderCfg()
     text_decoder: TextDecoderCfg = TextDecoderCfg()
