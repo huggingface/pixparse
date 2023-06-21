@@ -5,7 +5,8 @@ from typing import Optional
 @dataclass
 class ImageEncoderCfg:
     name: str = 'vit_base_patch16_224'
-    img_size: Optional[int] = 448
+    image_fmt: str = 'L'
+    image_size: Optional[int] = (576, 448)
     pretrained: bool = True
 
 

@@ -59,20 +59,26 @@ class TaskCrullerPretrain(Task):
         self.task_start_token = '<s_pretrain>'
         self.prompt_end_token = self.task_start_token
         self.max_position_embeddings = cfg.model.text_decoder.max_length
+        self.text_anno_fn = False  # set for image-text dataset experiments
 
         self.model = Cruller(cfg.model)  # FIXME would be good to defer weight init here
         self.loss = nn.CrossEntropyLoss(ignore_index=-100)
         self.has_no_sync = False
+        self.num_image_chs = 1 if cfg.model.image_encoder.image_fmt == 'L' else 3
 
         # preprocessors cross both the task/model & dataset domain,
         # created within task here and passed to data loaders
         self.image_preprocess_train = transforms.Compose([
             transforms.ToTensor(),
-            transforms.Resize(448),
-            transforms.CenterCrop(448),
+            transforms.Resize(
+                cfg.model.image_encoder.image_size,
+                interpolation=transforms.InterpolationMode.BICUBIC,
+                antialias=True),
+            #transforms.CenterCrop(448),  # FIXME need better aspect preserving resize & pad
             transforms.Normalize(
-                mean=(0.5,) * 3,
-                std=(0.5,) * 3
+                # FIXME get mean / std from pretrained img model, fallback to 0.5 in random init
+                mean=(0.5,) * self.num_image_chs,
+                std=(0.5,) * self.num_image_chs,
             )
         ])
         self.image_preprocess_eval = None
@@ -94,9 +100,9 @@ class TaskCrullerPretrain(Task):
             self.model.text_decoder.trunk.resize_token_embeddings(len(self.tokenizer))
         self.vocab_size = len(self.tokenizer)
 
-        #self.anno_preprocess_train = preprocess_ocr_anno()
+        preproc_fn = preprocess_text_anno if self.text_anno_fn else preprocess_ocr_anno
         self.anno_preprocess_train = partial(
-            preprocess_text_anno,
+            preproc_fn,
             tokenizer=self.tokenizer,
             max_position_embeddings=self.max_position_embeddings,
             task_start_token=self.task_start_token,
@@ -260,10 +266,6 @@ class TaskCrullerPretrain(Task):
 
     def load_state_dict(self, state_dict):
         pass
-
-    def save_checkpoint(self, filename):
-        with open(filename) as f:
-            torch.save(self.state_dict(), f)
 
     def __repr__(self):
         outputs = [

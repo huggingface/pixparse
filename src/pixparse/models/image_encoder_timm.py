@@ -7,11 +7,13 @@ from pixparse.models.config import ImageEncoderCfg
 def create_image_encoder(cfg: ImageEncoderCfg) -> nn.Module:
     assert cfg.name
     extra_kwargs = {}
-    if cfg.img_size is not None:
-        extra_kwargs['img_size'] = cfg.img_size
+    if cfg.image_size is not None:
+        extra_kwargs['img_size'] = cfg.image_size
+    assert cfg.image_fmt in ('L', 'RGB')
     model = timm.create_model(
         cfg.name,
         pretrained=cfg.pretrained,
+        in_chans=1 if cfg.image_fmt == 'L' else 3,
         num_classes=0,
         global_pool='',
         **extra_kwargs

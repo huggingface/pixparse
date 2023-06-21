@@ -9,14 +9,16 @@ def create_loader(
         is_train: bool,
         image_preprocess,
         anno_preprocess,
+        image_key='tif;tiff;png;jpg;jpeg',  # FIXME jpeg added for test w/ cc12m
+        image_fmt='L',
         seed: int = 0,
         world_size: int = 1,
 ):
     decoder = create_doc_anno_pipe(
         image_preprocess=image_preprocess,
         anno_preprocess=anno_preprocess,
-        image_key='tif;tiff;png;jpg;jpeg',  # FIXME jpeg added for test w/ cc12m
-        image_fmt='RGB',  # FIXME RGB for test w/ cc12m
+        image_key=image_key,
+        image_fmt=image_fmt,
     )
 
     loader = create_wds_loader(

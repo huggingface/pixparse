@@ -10,7 +10,7 @@ from simple_parsing import ArgumentParser
 import torch
 
 from pixparse.data import DataCfg, create_loader
-from pixparse.framework import DeviceEnv, Task, Monitor, train_one_interval, evaluate, setup_logging
+from pixparse.framework import DeviceEnv, Task, Monitor, train_one_interval, evaluate, setup_logging, random_seed
 from pixparse.task import TaskCrullerPretrain, TaskCrullerPretrainConfig
 
 _logger = logging.getLogger('train')
@@ -22,6 +22,7 @@ class TrainCfg:
     output_dir: str = './output'
     log_filename: str = 'out.log'
     checkpoint_dir: Optional[str] = None  # default output_dir/checkpoints
+    seed: int = 42
 
     # TODO
     # resume -- resume experiment from location, mode, etc
@@ -43,14 +44,17 @@ def train(
             loaders['train'],
         )
 
-        metrics = evaluate(
-            task,
-            loaders['eval']
-        )
+        if 'eval' in loaders:
+            metrics = evaluate(
+                task,
+                loaders['eval']
+            )
+        else:
+            metrics = {}
 
         # save checkpoint
         # checkpointer.save(task, metrics, interval)
-        task.save_checkpoint(os.path.join(cfg.checkpoint_dir, f'checkpoint-{i}.pt'))
+        torch.save(task.state_dict(), os.path.join(cfg.checkpoint_dir, f'checkpoint-{i}.pt'))
 
 
 parser = ArgumentParser(
@@ -69,6 +73,7 @@ def main():
     task_cfg: TaskCrullerPretrainConfig = args.task
 
     device_env = DeviceEnv()
+    random_seed(train_cfg.seed, rank=device_env.global_rank)
     print(device_env)
 
     # get the name of the experiments
@@ -124,6 +129,7 @@ def main():
         is_train=True,
         image_preprocess=task.image_preprocess_train,
         anno_preprocess=task.anno_preprocess_train,
+        image_fmt=task_cfg.model.image_encoder.image_fmt,
         world_size=device_env.world_size,
     )
     if data_cfg.eval is not None:

@@ -1,12 +1,9 @@
+import logging
 from typing import Callable
 
 import torch
 
-
-def merge_lines(page_anno, tokenizer):
-    output = '\n'.join([l['text'] for l in page_anno['lines']])
-    output = tokenizer(output)
-    return output
+_logger = logging.getLogger(__name__)
 
 
 def preprocess_text_anno(
@@ -50,12 +47,14 @@ def preprocess_ocr_anno(
         generator=None,
 ):
     # FIXME complete and update this fn to match our OCR annotation format
-    num_pages = len(anno['pages'])
+    if isinstance(anno, list):
+        # FIXME this was an intermediate annotation form, should not exist anymore
+        _logger.warning("Old [id, {}] annotation form found, correcting...")
+        anno = anno[1]
 
-    # FIXME for initial behaviour we will randomly sample one of N pages
-    # TODO determine if we want to train in multi-page mode, use another sampling strategy?
-    page_indices = [generator.randint(0, num_pages)]
-    # page_indices = range(num_pages)
+    num_pages = len(anno['pages'])
+    if not num_pages:
+        raise RuntimeError("Empty annotation. Skipping...")
 
     tokenizer_fn = lambda x: tokenizer(
         x,
@@ -63,18 +62,26 @@ def preprocess_ocr_anno(
         max_length=max_position_embeddings,
         padding='max_length',
         truncation=True).input_ids[0]
-
     pad_token_id = tokenizer.pad_token_id
     prompt_end_token_id = tokenizer.convert_tokens_to_ids(prompt_end_token)
+
+    # FIXME for initial behaviour we will randomly sample one of N pages
+    # TODO determine if we want to train in multi-page mode, use another sampling strategy?
+    page_indices = [generator.randint(0, num_pages - 1)]
+    # page_indices = range(num_pages)
     text_pages = []
     target_pages = []
     for i in page_indices:
         # FIXME treating pages separately, this best approach or tokenize w/ page-break?
+        anno_page = anno['pages'][i]
+        if not anno_page['text']:
+            raise RuntimeError("No text on page, skipping...")
 
         # FIXME see self.donut_model.json2token, task specific json tokenization for
         #  the non-pretrain tasks varies w/ differing special tokens and prompts
-        text = merge_lines(anno['pages'][i], tokenizer_fn)
+        text = '\n'.join(anno_page['text'])
         text = task_start_token + text + tokenizer.eos_token
+        text = tokenizer_fn(text)
 
         target = text.clone()
         # model doesn't need to predict pad token
@@ -85,4 +92,4 @@ def preprocess_ocr_anno(
         text_pages.append(text)
         target_pages.append(target)
 
-    return dict(text=text_pages, target=target_pages)
+    return dict(text=text_pages, target=target_pages), dict(page_indices=page_indices, num_pages=num_pages)
