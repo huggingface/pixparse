@@ -9,7 +9,7 @@ def create_loader(
         is_train: bool,
         image_preprocess,
         anno_preprocess,
-        image_key='tif;tiff;png;jpg;jpeg',  # FIXME jpeg added for test w/ cc12m
+        image_key='pdf;tif;tiff;png;jpg;jpeg',  # FIXME jpeg added for test w/ cc12m
         image_fmt='L',
         seed: int = 0,
         world_size: int = 1,
