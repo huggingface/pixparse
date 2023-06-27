@@ -1,9 +1,45 @@
-from typing import Any, Dict
+from dataclasses import dataclass
+from typing import Any, Dict, Optional
+
+from .config import TrainTaskCfg
+from .device import DeviceEnv
+from .monitor import Monitor
 
 
 class Task:
-    def __init__(self):
-        pass
+    def __init__(
+            self,
+            device_env: DeviceEnv,
+            monitor: Monitor = None,
+    ):
+        self.device_env = device_env
+        self.monitor = monitor
+
+
+class TrainTask(Task):
+    def __init__(
+            self,
+            cfg: TrainTaskCfg,
+            device_env: DeviceEnv,
+            monitor: Monitor = None,
+    ):
+        super().__init__(device_env=device_env, monitor=monitor)
+
+        self.num_intervals = cfg.num_intervals
+        self.num_warmup_intervals = cfg.num_warmup_intervals
+        self.num_steps_per_interval = None  # uninitialized, needs dataset info
+        self.start_interval = 0
+
+        self.step = 0  # step (aka optimizer update) count
+        self.batch_idx = 0  # total train batch count
+        self.interval_idx = 0  # interval (aka epoch or restorable period-between-checkpoints)
+        self.interval_batch_idx = 0  # batch count in current interval
+
+        # optimization state initialized in train_setup()
+        self.optimizer = None
+        self.scheduler = None
+        self.scaler = None
+        self.autocast = None
 
     def train_setup(self, *args, **kwargs):
         pass
@@ -19,3 +55,8 @@ class Task:
 
     def eval_step(self, sample: Dict[str, Any]) -> Dict[str, Any]:
         pass
+
+    def get_current_lr(self):
+        lrl = [param_group['lr'] for param_group in self.optimizer.param_groups]
+        lr = sum(lrl) / len(lrl)
+        return lr

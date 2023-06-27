@@ -1,7 +1,6 @@
 from dataclasses import dataclass
 from functools import partial
 from contextlib import nullcontext
-from typing import Optional
 
 import torch
 import torch.nn as nn
@@ -14,7 +13,7 @@ import timm.utils
 from timm.optim import create_optimizer_v2
 from timm.scheduler import create_scheduler_v2
 
-from pixparse.framework import OptimizationCfg, Task, DeviceEnv, Monitor
+from pixparse.framework import TrainTaskCfg, TrainTask, DeviceEnv, Monitor
 from pixparse.models import Cruller, ModelCfg
 from pixparse.data import preprocess_ocr_anno, preprocess_text_anno
 
@@ -25,15 +24,12 @@ from pixparse.data import preprocess_ocr_anno, preprocess_text_anno
 
 
 @dataclass
-class TaskCrullerPretrainConfig:
+class TaskCrullerPretrainCfg(TrainTaskCfg):
     model: ModelCfg = ModelCfg()
     # tokenizer = ?  # FIXME tokenizer config needed?
-    opt: OptimizationCfg = OptimizationCfg()
-    dtype: Optional[str] = None
-    amp: bool = True
 
 
-class TaskCrullerPretrain(Task):
+class TaskCrullerPretrain(TrainTask):
     """ Cruller Pretraining Task
 
     NOTES:
@@ -48,14 +44,17 @@ class TaskCrullerPretrain(Task):
     """
     def __init__(
             self,
-            cfg: TaskCrullerPretrainConfig,
+            cfg: TaskCrullerPretrainCfg,
             device_env: DeviceEnv,
             monitor: Monitor = None,
     ):
-        super().__init__()
+        super().__init__(
+            cfg=cfg,
+            device_env=device_env,
+            monitor=monitor,
+        )
         self.cfg = cfg
-        self.device_env = device_env
-        self.monitor = monitor
+
         self.task_start_token = '<s_pretrain>'
         self.prompt_end_token = self.task_start_token
         self.max_position_embeddings = cfg.model.text_decoder.max_length
@@ -111,27 +110,29 @@ class TaskCrullerPretrain(Task):
 
         self.anno_preprocess_eval = None
 
-        # optimization state initialized in train_setup()
-        self.optimizer = None
-        self.scheduler = None
-        self.scaler = None
-        self.autocast = None
-
         # FIXME train/eval metrics and meters
         self.train_metrics = {}
         self.eval_metrics = {}
 
-        # FIXME improve naming 'count', 'index'?
-        self.step = 0  # step (aka update) count
-        self.interval = 0  # interval (aka epoch or restorable period-between-checkpoints)
-        self.interval_batch = 0  # batch count in current interval
-
     def train_setup(
             self,
-            num_intervals: int,
-            num_warmup_intervals: int,
             num_steps_per_interval: int,
     ):
+        """
+        FIXME this interface needs refinement
+        * currently, training duration is 'interval' based, where interval is either full dataset epoch, or
+            sampled with replacement periods, intervals correspond to checkpoint / eval periods
+        * LR schedule is updated per-step, so num_steps_per_interval is required to translate intervals ->
+            total steps for scheduling
+        * future should allow for step based durations (keeping interval as option), where train and warmup
+            durations are specified in steps, checkpoint intervals in steps or time
+
+        Args:
+            num_steps_per_interval:
+
+        Returns:
+
+        """
         # FIXME currently thinking moving to device, setup DDP / FSDP makes sense
         # in setup here vs in __init__(). For __init__ need the model structure to
         # instantiate / setup tokenizer, other aspects. I don't think we need to init
@@ -155,16 +156,6 @@ class TaskCrullerPretrain(Task):
             lr=self.cfg.opt.learning_rate,
         )
 
-        self.scheduler, num_scheduled_epochs = create_scheduler_v2(
-            self.optimizer,
-            self.cfg.opt.scheduler,
-            step_on_epochs=False,
-            updates_per_epoch=num_steps_per_interval,
-            warmup_epochs=num_warmup_intervals,
-            num_epochs=num_intervals,
-        )
-        self.scheduler.step_update(0)
-
         if self.cfg.amp:
             self.scaler = timm.utils.NativeScaler()
             self.autocast = partial(torch.autocast, device_type=device.type, dtype=self.cfg.dtype)
@@ -172,25 +163,40 @@ class TaskCrullerPretrain(Task):
             self.scaler = None
             self.autocast = nullcontext
 
+        # FIXME will need two paths here to support interval vs step based durations
+        #  in either case LR is always stepped with each optimizer update (train step)
+        self.num_steps_per_interval = num_steps_per_interval
+        self.scheduler, num_scheduled_epochs = create_scheduler_v2(
+            self.optimizer,
+            self.cfg.opt.scheduler,
+            warmup_lr=self.cfg.opt.warmup_learning_rate,
+            warmup_epochs=self.num_warmup_intervals,
+            num_epochs=self.num_intervals,
+            step_on_epochs=False,  # sched is stepped on updates
+            updates_per_epoch=num_steps_per_interval,
+        )
+        self.scheduler.step_update(0)
+
     def train_interval_start(self):
         # epoch / interval start hook, useful?
         self.optimizer.zero_grad()
-        self.interval_batch = 0
+        self.interval_batch_idx = 0
 
     def train_interval_end(self):
         # epoch / interval end hook, useful?
-        self.interval += 1
+        self.monitor.log_phase('train', self.interval_idx)
+        self.interval_idx += 1
 
     def train_step(self, sample):
         image_input, text_input, text_target = sample
         result = {}
 
-        image_input = image_input.to(self.device_env.device)
-        text_input = text_input[:, :-1].to(self.device_env.device)
-        text_target = text_target[:, 1:].to(self.device_env.device)
+        image_input = image_input.to(self.device_env.device, non_blocking=True)
+        text_input = text_input[:, :-1].to(self.device_env.device, non_blocking=True)
+        text_target = text_target[:, 1:].to(self.device_env.device, non_blocking=True)
 
         accum_steps = self.cfg.opt.grad_accum_steps
-        need_update = (self.interval_batch + 1) % accum_steps == 0
+        need_update = (self.interval_batch_idx + 1) % accum_steps == 0
 
         def _forward():
             with self.autocast():
@@ -233,7 +239,8 @@ class TaskCrullerPretrain(Task):
             loss = _forward()
             _backward(loss)
 
-        self.interval_batch += 1
+        self.batch_idx += 1
+        self.interval_batch_idx += 1
         if not need_update:
             return result
 
@@ -245,8 +252,10 @@ class TaskCrullerPretrain(Task):
             self.monitor.log_step(
                 'train',
                 step_idx=self.step,
-                interval=self.interval,
+                step_end_idx=self.num_intervals * self.num_steps_per_interval,
+                interval=self.interval_idx,
                 loss=loss.item(),
+                lr=self.get_current_lr(),
             )
 
         return result

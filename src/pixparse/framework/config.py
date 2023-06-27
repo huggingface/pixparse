@@ -7,6 +7,7 @@ class OptimizationCfg:
     optimizer: str = 'adamw'
     scheduler: str = 'cosine'
     learning_rate: float = 5e-4
+    warmup_learning_rate: float = 0.
     weight_decay: float = .02
     clip_grad_value: Optional[float] = None
     clip_grad_mode: Optional[str] = None
@@ -15,3 +16,10 @@ class OptimizationCfg:
     betas: Optional[Tuple[float, float]] = None
 
 
+@dataclass
+class TrainTaskCfg:
+    num_intervals: int = 100
+    num_warmup_intervals: int = 5
+    opt: OptimizationCfg = OptimizationCfg()
+    dtype: Optional[str] = None
+    amp: bool = True

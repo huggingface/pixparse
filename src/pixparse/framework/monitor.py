@@ -66,7 +66,7 @@ def _add_kwargs(text_update, name_map=None, **kwargs):
         else:
             return f'{key}: {val}'
 
-    def _map_name(key, name_map, capitalize=True):
+    def _map_name(key, name_map, capitalize=False):
         if name_map is None:
             if capitalize:
                 return key.capitalize() if not key.isupper() else key
@@ -83,7 +83,7 @@ def _add_kwargs(text_update, name_map=None, **kwargs):
                     continue
                 text_update += [_to_str(kk, vv)]
         else:
-            name = _map_name(k, name_map, capitalize=True)
+            name = _map_name(k, name_map)
             if not name:
                 continue
             text_update += [_to_str(name, v)]
@@ -97,7 +97,11 @@ class Monitor:
             output_dir=None,
             logger=None,
             hparams=None,
-            log_wandb=False,
+            wandb=False,
+            wandb_project='unknown',
+            wandb_dir='wandb',
+            tensorboard=False,
+            tensorboard_dir='tensorboard',
             output_enabled=True,
     ):
         self.output_dir = output_dir  # for tensorboard, csv, text file (TODO) logging
@@ -111,13 +115,23 @@ class Monitor:
             self.csv_writer = None
 
         # Setup Tensorboard
-        self.tb = None  # FIXME tensorboard
+        self.tensorboard = None
+        if tensorboard:
+            assert HAS_TB
+            self.tensorboard = SummaryWriter(
+                log_dir=os.path.join(self.output_dir, tensorboard_dir)
+            )
 
         # Setup W&B
         self.wandb = None
-        if log_wandb:
+        if wandb:
             if HAS_WANDB:
-                self.wandb = wandb.init(project=experiment_name, config=hparams)
+                self.wandb = wandb.init(
+                    project=wandb_project,
+                    name=experiment_name,
+                    config=hparams,
+                    dir=os.path.join(self.output_dir, wandb_dir)
+                )
             else:
                 _logger.warning(
                     "You've requested to log metrics to wandb but package not found. "
@@ -133,6 +147,7 @@ class Monitor:
             interval: Optional[int] = None,
             loss: Optional[float] = None,
             rate: Optional[Union[float, Tuple[float, float]]] = None,
+            learning_rate: Optional[float] = None,
             phase_suffix: str = '',
             **kwargs,
     ):
@@ -155,21 +170,35 @@ class Monitor:
             f'[{step_idx}]' if step_end_idx is None else None,
             f'[{step_idx}/{step_end_idx} ({progress:>3.0f}%)]' if step_end_idx is not None else None,
             rate_str,
-            f'Loss: {loss:.5f}' if loss is not None else None,
+            f'loss: {loss:.5f}' if loss is not None else None,
+            f'lr: {learning_rate:.5f}' if learning_rate is not None else None,
         ]
         _add_kwargs(text_update, **kwargs)
         log_str = ' '.join(item for item in text_update if item)
         self.logger.info(log_str)
-        if self.tb is not None:
-            # FIXME log step values to tensorboard
-            pass
+
+        if self.tensorboard is not None:
+            if loss is not None:
+                self.tensorboard.add_scalar('/'.join(['Loss', phase_title]), loss, step_idx)
+            if learning_rate is not None:
+                self.tensorboard.add_scalar('/'.join(['Learning Rate', phase_title]), loss, step_idx)
+            for k, v in kwargs.items():
+                self.tensorboard.add_scalar('/'.join([k, phase_title]), v, step_idx)
+
+        if self.wandb is not None:
+            wandb_log = dict(**kwargs)
+            if loss:
+                wandb_log['loss'] = loss
+            if learning_rate:
+                wandb_log['learning_rate'] = learning_rate
+            self.wandb.log({phase_title: wandb_log}, step=step_idx)
 
     def log_phase(
             self,
             phase: str = 'eval',
             interval: Optional[int] = None,
             name_map: Optional[dict] = None,
-            **kwargs
+            **kwargs,
     ):
         """log completion of evaluation or training phase
         """
@@ -178,7 +207,7 @@ class Monitor:
 
         title = [
             f'{phase.capitalize()}',
-            f'interval: {interval}' if interval is not None else None,
+            f'interval {interval}' if interval is not None else None,
             'completed. ',
         ]
         title_str = ' '.join(i for i in title if i)
@@ -207,8 +236,10 @@ class Monitor:
         row_dict = summary_row_dict(index=index, index_name=index_name, results=results)
         if self.csv_writer:
             self.csv_writer.update(row_dict)
+
         if self.wandb is not None:
             wandb.log(row_dict)
-        if self.tb:
-            # FIXME log epoch summaries to tensorboard
+
+        if self.tensorboard:
+            # FIXME log interval (epoch) summaries to tensorboard?
             pass

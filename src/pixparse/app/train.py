@@ -10,8 +10,8 @@ from simple_parsing import ArgumentParser
 import torch
 
 from pixparse.data import DataCfg, create_loader
-from pixparse.framework import DeviceEnv, Task, Monitor, train_one_interval, evaluate, setup_logging, random_seed
-from pixparse.task import TaskCrullerPretrain, TaskCrullerPretrainConfig
+from pixparse.framework import DeviceEnv, TrainTask, Monitor, train_one_interval, evaluate, setup_logging, random_seed
+from pixparse.task import TaskCrullerPretrain, TaskCrullerPretrainCfg
 
 _logger = logging.getLogger('train')
 
@@ -26,8 +26,11 @@ class TrainCfg:
 
     # TODO
     # resume -- resume experiment from location, mode, etc
-    # wandb -- wandb config
-    # tensorboard -- tensorboard config
+
+    wandb: bool = False
+    wandb_project: str = 'unknown'
+
+    tensorboard: bool = False
 
 
 def train(
@@ -35,8 +38,8 @@ def train(
         task: TaskCrullerPretrain,  # FIXME define common functionality in interface
         loaders,
 ):
-    intervals = 100
-    for i in range(intervals):
+    device_env = task.device_env
+    for i in range(task.start_interval, task.num_intervals):
         # FIXME flatten interval loop to have one eval point
         #  i.e step intervals vs epoch intervals handled similarly?
         train_one_interval(
@@ -54,7 +57,8 @@ def train(
 
         # save checkpoint
         # checkpointer.save(task, metrics, interval)
-        torch.save(task.state_dict(), os.path.join(cfg.checkpoint_dir, f'checkpoint-{i}.pt'))
+        if device_env.is_primary():
+            torch.save(task.state_dict(), os.path.join(cfg.checkpoint_dir, f'checkpoint-{i}.pt'))
 
 
 parser = ArgumentParser(
@@ -63,14 +67,14 @@ parser = ArgumentParser(
 )
 parser.add_argument("--foo", type=int, default=123, help="foo help")
 parser.add_arguments(TrainCfg, dest='train')
-parser.add_arguments(TaskCrullerPretrainConfig, dest='task')
+parser.add_arguments(TaskCrullerPretrainCfg, dest='task')
 parser.add_arguments(DataCfg, dest='data')
 
 
 def main():
     args = parser.parse_args()
     train_cfg: TrainCfg = args.train
-    task_cfg: TaskCrullerPretrainConfig = args.task
+    task_cfg: TaskCrullerPretrainCfg = args.task
 
     device_env = DeviceEnv()
     random_seed(train_cfg.seed, rank=device_env.global_rank)
@@ -106,7 +110,9 @@ def main():
     monitor = Monitor(
         train_cfg.experiment,
         output_dir=experiment_path,
-        # FIXME pass wandb / tb paths and enables
+        wandb=train_cfg.wandb,
+        wandb_project=train_cfg.wandb_project,
+        tensorboard=train_cfg.tensorboard,
         output_enabled=device_env.is_primary(),
     )
 
@@ -142,8 +148,6 @@ def main():
         )
 
     task.train_setup(
-        num_intervals=10,
-        num_warmup_intervals=1,
         num_steps_per_interval=loaders['train'].num_batches,
     )
     if device_env.is_primary():
