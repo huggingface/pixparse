@@ -1,8 +1,8 @@
-from .task import TrainTask
+from .task import TaskTrain
 
 
 def evaluate(
-        task: TrainTask,  # FIXME eval task?
+        task: TaskTrain,  # FIXME eval task?
         loader,
 ):
     pass

@@ -13,7 +13,7 @@ import timm.utils
 from timm.optim import create_optimizer_v2
 from timm.scheduler import create_scheduler_v2
 
-from pixparse.framework import TrainTaskCfg, TrainTask, DeviceEnv, Monitor
+from pixparse.framework import TaskTrainCfg, TaskTrain, DeviceEnv, Monitor
 from pixparse.models import Cruller, ModelCfg
 from pixparse.data import preprocess_ocr_anno, preprocess_text_anno
 
@@ -24,12 +24,12 @@ from pixparse.data import preprocess_ocr_anno, preprocess_text_anno
 
 
 @dataclass
-class TaskCrullerPretrainCfg(TrainTaskCfg):
+class TaskCrullerPretrainCfg(TaskTrainCfg):
     model: ModelCfg = ModelCfg()
     # tokenizer = ?  # FIXME tokenizer config needed?
 
 
-class TaskCrullerPretrain(TrainTask):
+class TaskCrullerPretrain(TaskTrain):
     """ Cruller Pretraining Task
 
     NOTES:

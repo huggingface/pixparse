@@ -1,7 +1,7 @@
 from dataclasses import dataclass
 from typing import Any, Dict, Optional
 
-from .config import TrainTaskCfg
+from .config import TaskTrainCfg
 from .device import DeviceEnv
 from .monitor import Monitor
 
@@ -16,10 +16,10 @@ class Task:
         self.monitor = monitor
 
 
-class TrainTask(Task):
+class TaskTrain(Task):
     def __init__(
             self,
-            cfg: TrainTaskCfg,
+            cfg: TaskTrainCfg,
             device_env: DeviceEnv,
             monitor: Monitor = None,
     ):

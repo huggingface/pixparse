@@ -17,7 +17,7 @@ class OptimizationCfg:
 
 
 @dataclass
-class TrainTaskCfg:
+class TaskTrainCfg:
     num_intervals: int = 100
     num_warmup_intervals: int = 5
     opt: OptimizationCfg = OptimizationCfg()

@@ -1,8 +1,8 @@
-from .task import TrainTask
+from .task import TaskTrain
 
 
 def train_one_interval(
-        task: TrainTask,
+        task: TaskTrain,
         loader,
 ):
     task.train_interval_start()
