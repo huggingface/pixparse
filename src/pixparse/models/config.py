@@ -1,4 +1,4 @@
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Optional
 
 
@@ -22,5 +22,5 @@ class TextDecoderCfg:
 @dataclass
 class ModelCfg:
     name: str = 'cruller-base'
-    image_encoder: ImageEncoderCfg = ImageEncoderCfg()
-    text_decoder: TextDecoderCfg = TextDecoderCfg()
+    image_encoder: ImageEncoderCfg = field(default_factory=ImageEncoderCfg)
+    text_decoder: TextDecoderCfg = field(default_factory=TextDecoderCfg)
