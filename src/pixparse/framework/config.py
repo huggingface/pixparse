@@ -1,4 +1,4 @@
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Optional, Tuple
 
 
@@ -20,6 +20,6 @@ class OptimizationCfg:
 class TaskTrainCfg:
     num_intervals: int = 100
     num_warmup_intervals: int = 5
-    opt: OptimizationCfg = OptimizationCfg()
+    opt: OptimizationCfg = field(default_factory=OptimizationCfg)
     dtype: Optional[str] = None
     amp: bool = True

@@ -10,7 +10,7 @@ from simple_parsing import ArgumentParser
 import torch
 
 from pixparse.data import DataCfg, create_loader
-from pixparse.framework import DeviceEnv, TaskTrain, Monitor, train_one_interval, evaluate, setup_logging, random_seed
+from pixparse.framework import DeviceEnv, Monitor, train_one_interval, evaluate, setup_logging, random_seed
 from pixparse.task import TaskCrullerPretrain, TaskCrullerPretrainCfg
 
 _logger = logging.getLogger('train')
