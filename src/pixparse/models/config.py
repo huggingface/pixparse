@@ -2,7 +2,7 @@ import copy
 import re
 from pathlib import Path
 from dataclasses import dataclass, field
-from typing import Optional
+from typing import Optional, Tuple
 
 from simple_parsing.helpers import Serializable
 
@@ -15,7 +15,7 @@ _MODEL_CONFIGS = {}  # model_name: config
 class ImageEncoderCfg(Serializable):
     name: str = 'vit_base_patch16_224'
     image_fmt: str = 'L'
-    image_size: Optional[int] = (576, 448)
+    image_size: Optional[Tuple[int, int]] = (576, 448)
     pretrained: bool = True
 
 

@@ -28,11 +28,13 @@ _logger = logging.getLogger(__name__)
 
 @dataclass
 class TaskCrullerPretrainCfg(TaskTrainCfg):
-    model_name: Optional[str] = 'cruller_base'  # if model_name set, loads a pre-defined config in models/configs
+    model_name: Optional[str] = None  # if model_name set, loads a pre-defined config in models/configs
     model: ModelCfg = field(default_factory=ModelCfg)  # FIXME rename model_cfg to diff from model_name?
     # tokenizer = ?  # FIXME tokenizer config needed?
 
     def __post_init__(self):
+        # FIXME figure out how to get command line args to overlay on top pre-defined
+        # config but ONLY if they are specified on cmd line?
         if self.model_name:
             model = get_model_config(self.model_name)
             if model is None:
@@ -172,7 +174,7 @@ class TaskCrullerPretrain(TaskTrain):
 
         opt_kwargs = {}
         if self.cfg.opt.betas is not None:
-            opt_kwargs['beta'] = self.cfg.opt.betas
+            opt_kwargs['betas'] = self.cfg.opt.betas
         if self.cfg.opt.momentum is not None:
             opt_kwargs['momentum'] = self.cfg.opt.momentum
         self.optimizer = create_optimizer_v2(
