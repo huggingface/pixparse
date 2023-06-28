@@ -9,6 +9,7 @@ class OptimizationCfg:
     learning_rate: float = 5e-4
     warmup_learning_rate: float = 0.
     weight_decay: float = .02
+    eps: float = 1e-6
     clip_grad_value: Optional[float] = None
     clip_grad_mode: Optional[str] = None
     grad_accum_steps: int = 1
