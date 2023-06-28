@@ -11,6 +11,7 @@ import torch
 
 from pixparse.data import DataCfg, create_loader
 from pixparse.framework import DeviceEnv, Monitor, train_one_interval, evaluate, setup_logging, random_seed
+from pixparse.models import clean_model_name
 from pixparse.task import TaskCrullerPretrain, TaskCrullerPretrainCfg
 
 _logger = logging.getLogger('train')
@@ -64,6 +65,7 @@ def train(
 parser = ArgumentParser(
     add_option_string_dash_variants=simple_parsing.DashVariant.DASH,
     argument_generation_mode=simple_parsing.ArgumentGenerationMode.BOTH,
+    add_config_path_arg=True,
 )
 parser.add_argument("--foo", type=int, default=123, help="foo help")
 parser.add_arguments(TrainCfg, dest='train')
@@ -75,6 +77,7 @@ def main():
     args = parser.parse_args()
     train_cfg: TrainCfg = args.train
     task_cfg: TaskCrullerPretrainCfg = args.task
+    data_cfg: DataCfg = args.data
 
     device_env = DeviceEnv()
     random_seed(train_cfg.seed, rank=device_env.global_rank)
@@ -82,14 +85,16 @@ def main():
 
     # get the name of the experiments
     if train_cfg.experiment is None:
-        model_name_safe = task_cfg.model.name.replace('/', '-')
-        date_str = datetime.now().strftime("%Y_%m_%d-%H_%M_%S")
+        model_name_safe = clean_model_name(task_cfg.model_name)
+        date_str = datetime.now().strftime("%Y%m%d-%H%M%S")
         if device_env.world_size > 1:
             # sync date_str from master to all ranks
             date_str = device_env.broadcast_object(date_str)
         experiment = '-'.join([
             date_str,
             f"model_{model_name_safe}",
+            f"lr_{task_cfg.opt.learning_rate}",
+            f"b_{data_cfg.train.batch_size}",
         ])
         train_cfg = replace(train_cfg, experiment=experiment)
 
@@ -120,6 +125,7 @@ def main():
     os.makedirs(checkpoint_dir, exist_ok=True)
     train_cfg = replace(train_cfg, checkpoint_dir=checkpoint_dir)
     if device_env.is_primary():
+        _logger.info(task_cfg)
         _logger.info(train_cfg)
 
     task = TaskCrullerPretrain(
@@ -128,7 +134,6 @@ def main():
         monitor,
     )
 
-    data_cfg: DataCfg = args.data
     loaders = {}
     loaders['train'] = create_loader(
         data_cfg.train,

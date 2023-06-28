@@ -1,0 +1,16 @@
+{
+    "image_encoder": {
+        "name": "vit_base_patch16_224",
+        "image_fmt": "L",
+        "image_size": [
+            576,
+            448
+        ]
+    },
+    "text_decoder": {
+        "name": "facebook/bart-base",
+        "num_decoder_layers": 4,
+        "max_length": 1024,
+        "pad_token_id": null
+    }
+}

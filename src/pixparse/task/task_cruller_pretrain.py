@@ -1,6 +1,8 @@
-from dataclasses import dataclass
-from functools import partial
+import logging
 from contextlib import nullcontext
+from dataclasses import dataclass, field
+from functools import partial
+from typing import Optional
 
 import torch
 import torch.nn as nn
@@ -14,9 +16,10 @@ from timm.optim import create_optimizer_v2
 from timm.scheduler import create_scheduler_v2
 
 from pixparse.framework import TaskTrainCfg, TaskTrain, DeviceEnv, Monitor
-from pixparse.models import Cruller, ModelCfg
+from pixparse.models import Cruller, ModelCfg, get_model_config
 from pixparse.data import preprocess_ocr_anno, preprocess_text_anno
 
+_logger = logging.getLogger(__name__)
 
 # FIXME structure of config tree
 # pull together model + prec + opt in a Task config that is then in the train cfg?
@@ -25,8 +28,19 @@ from pixparse.data import preprocess_ocr_anno, preprocess_text_anno
 
 @dataclass
 class TaskCrullerPretrainCfg(TaskTrainCfg):
-    model: ModelCfg = ModelCfg()
+    model_name: Optional[str] = 'cruller_base'  # if model_name set, loads a pre-defined config in models/configs
+    model: ModelCfg = field(default_factory=ModelCfg)  # FIXME rename model_cfg to diff from model_name?
     # tokenizer = ?  # FIXME tokenizer config needed?
+
+    def __post_init__(self):
+        if self.model_name:
+            model = get_model_config(self.model_name)
+            if model is None:
+                _logger.warning(f'Model config for {self.model_name} was not found, using defaults.')
+            else:
+                self.model = model
+        else:
+            self.model_name = 'custom'
 
 
 class TaskCrullerPretrain(TaskTrain):
