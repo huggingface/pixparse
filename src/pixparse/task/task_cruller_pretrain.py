@@ -68,6 +68,12 @@ class TaskCrullerPretrain(TaskTrain):
             monitor=monitor,
         )
         self.cfg = cfg
+        # NOTE dtype is currently being used as 'amp dtype' only, ie the low precision type,
+        #  we may want to differentiate different precision modes such as
+        #  amp + dtype, pure float16/bfloat16, custom mixed prec, etc
+        self.amp_dtype = None
+        if cfg.dtype is not None:
+            self.amp_dtype = torch.bfloat16 if cfg.dtype in ('bfloat16', 'bf16') else torch.float16
 
         self.task_start_token = '<s_pretrain>'
         self.prompt_end_token = self.task_start_token
@@ -164,15 +170,22 @@ class TaskCrullerPretrain(TaskTrain):
             )
             self.has_no_sync = hasattr(self.model, 'no_sync')
 
+        opt_kwargs = {}
+        if self.cfg.opt.betas is not None:
+            opt_kwargs['beta'] = self.cfg.opt.betas
+        if self.cfg.opt.momentum is not None:
+            opt_kwargs['momentum'] = self.cfg.opt.momentum
         self.optimizer = create_optimizer_v2(
             self.model,
             self.cfg.opt.optimizer,
             lr=self.cfg.opt.learning_rate,
+            eps=self.cfg.opt.eps,
+            **opt_kwargs,
         )
 
         if self.cfg.amp:
             self.scaler = timm.utils.NativeScaler()
-            self.autocast = partial(torch.autocast, device_type=device.type, dtype=self.cfg.dtype)
+            self.autocast = partial(torch.autocast, device_type=device.type, dtype=self.amp_dtype)
         else:
             self.scaler = None
             self.autocast = nullcontext
