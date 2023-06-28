@@ -80,6 +80,7 @@ def preprocess_ocr_anno(
         # FIXME see self.donut_model.json2token, task specific json tokenization for
         #  the non-pretrain tasks varies w/ differing special tokens and prompts
         text = '\n'.join(anno_page['text'])
+        orig_text = text
         text = task_start_token + text + tokenizer.eos_token
         text = tokenizer_fn(text)
 
@@ -92,4 +93,4 @@ def preprocess_ocr_anno(
         text_pages.append(text)
         target_pages.append(target)
 
-    return dict(text=text_pages, target=target_pages), dict(page_indices=page_indices, num_pages=num_pages)
+    return dict(text=text_pages, target=target_pages), dict(page_indices=page_indices, num_pages=num_pages, orig_text=orig_text)
