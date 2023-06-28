@@ -68,7 +68,6 @@ parser = ArgumentParser(
     argument_generation_mode=simple_parsing.ArgumentGenerationMode.BOTH,
     add_config_path_arg=True,
 )
-parser.add_argument("--foo", type=int, default=123, help="foo help")
 parser.add_arguments(TrainCfg, dest='train')
 parser.add_arguments(TaskCrullerPretrainCfg, dest='task')
 parser.add_arguments(DataCfg, dest='data')
@@ -154,7 +153,7 @@ def main():
         )
 
     task.train_setup(
-        num_steps_per_interval=loaders['train'].num_batches,
+        num_batches_per_interval=loaders['train'].num_batches,
     )
     if device_env.is_primary():
         _logger.info(task)

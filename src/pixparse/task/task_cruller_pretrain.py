@@ -138,7 +138,7 @@ class TaskCrullerPretrain(TaskTrain):
 
     def train_setup(
             self,
-            num_steps_per_interval: int,
+            num_batches_per_interval: int,
     ):
         """
         FIXME this interface needs refinement
@@ -150,7 +150,7 @@ class TaskCrullerPretrain(TaskTrain):
             durations are specified in steps, checkpoint intervals in steps or time
 
         Args:
-            num_steps_per_interval:
+            num_batches_per_interval:
 
         Returns:
 
@@ -194,7 +194,7 @@ class TaskCrullerPretrain(TaskTrain):
 
         # FIXME will need two paths here to support interval vs step based durations
         #  in either case LR is always stepped with each optimizer update (train step)
-        self.num_steps_per_interval = num_steps_per_interval
+        self.num_steps_per_interval = num_batches_per_interval // self.cfg.opt.grad_accum_steps
         self.scheduler, num_scheduled_epochs = create_scheduler_v2(
             self.optimizer,
             self.cfg.opt.scheduler,
@@ -202,7 +202,7 @@ class TaskCrullerPretrain(TaskTrain):
             warmup_epochs=self.num_warmup_intervals,
             num_epochs=self.num_intervals,
             step_on_epochs=False,  # sched is stepped on updates
-            updates_per_epoch=num_steps_per_interval,
+            updates_per_epoch=self.num_steps_per_interval,
         )
         self.scheduler.step_update(0)
 
