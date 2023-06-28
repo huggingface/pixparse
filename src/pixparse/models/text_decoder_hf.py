@@ -12,6 +12,10 @@ def create_text_decoder(cfg: TextDecoderCfg) -> transformers.BartForCausalLM:  #
 
     config = transformers.AutoConfig.from_pretrained(cfg.name)
     config.add_cross_attention = True
+    if False:  # FIXME this were set in Donut but missed in first pass, should compare
+        config.is_encoder_decoder = False
+        config.scale_embedding = True
+        config.add_final_layer_norm = True
     if cfg.num_decoder_layers is not None:
         config.decoder_layers = cfg.num_decoder_layers
     if cfg.max_length is not None:
