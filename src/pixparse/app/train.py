@@ -45,6 +45,7 @@ def train(
         #  i.e step intervals vs epoch intervals handled similarly?
         train_one_interval(
             task,
+            i,
             loaders['train'],
         )
 
@@ -59,7 +60,7 @@ def train(
         # save checkpoint
         # checkpointer.save(task, metrics, interval)
         if device_env.is_primary():
-            torch.save(task.state_dict(), os.path.join(cfg.checkpoint_dir, f'checkpoint-{i}.pt'))
+            torch.save(task.state_dict(), os.path.join(cfg.checkpoint_dir, f'large_checkpoint-{i}.pt'))
 
 
 parser = ArgumentParser(

@@ -29,6 +29,7 @@ def create_text_decoder(cfg: TextDecoderCfg) -> transformers.BartForCausalLM:  #
         )
 
     # FIXME not sure if this is needed or what best approach is? Seems a bit of a Donut hack...
+    # Yep looks like it
     model.model.decoder.embed_tokens.padding_idx = cfg.pad_token_id
 
     return model
@@ -36,11 +37,11 @@ def create_text_decoder(cfg: TextDecoderCfg) -> transformers.BartForCausalLM:  #
 
 class TextDecoderHf(nn.Module):
 
-    def __init__(self, cfg: TextDecoderCfg):
+    def __init__(self, cfg: TextDecoderCfg, tokenizer):
         super().__init__()
         self.trunk = create_text_decoder(cfg)
+        self.tokenizer = tokenizer
 
-    # FIXME cut & paste from Donut, needs updating!!
     def prepare_inputs_for_inference(
             self,
             input_ids: torch.Tensor,
