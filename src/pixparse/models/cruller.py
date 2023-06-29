@@ -58,17 +58,20 @@ class Cruller(nn.Module):
         if image_tensors is None:
             image_tensors = self.encoder.prepare_input(image).unsqueeze(0)
 
-        if self.device.type == "cuda":  # half is not compatible in cpu implementation.
+        try:
             image_tensors = image_tensors.half()
-            image_tensors = image_tensors.to(self.device)
+            image_tensors = image_tensors.to(self.cfg.device)
+        except:
+            # half is not compatible in cpu implementation.
+            pass
 
         if prompt_tensors is None:
             prompt_tensors = self.text_decoder.tokenizer(prompt, add_special_tokens=False, return_tensors="pt")["input_ids"]
 
-        prompt_tensors = prompt_tensors.to(self.device)
+        prompt_tensors = prompt_tensors.to(self.cfg.device)
 
         last_hidden_state = self.image_encoder(image_tensors)
-        if self.device.type != "cuda":
+        if self.cfg.device.type != "cuda":
             last_hidden_state = last_hidden_state.to(torch.float32)
 
         encoder_outputs = ModelOutput(last_hidden_state=last_hidden_state, attentions=None)

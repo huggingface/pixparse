@@ -104,6 +104,3 @@ class TextDecoderHf(GenerationMixin, nn.Module):
             return_dict=return_dict,
         )
         return output
-
-    def generate(self):
-

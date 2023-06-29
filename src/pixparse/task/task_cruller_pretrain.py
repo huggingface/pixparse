@@ -311,7 +311,7 @@ class TaskCrullerPretrain(TaskTrain):
         return next_token_id, probs
 
     def generate_ocr(self, encoder_outputs):
-        input_ids = torch.tensor([self.tokenizer('<s_pretrain>')['input_ids'][1]]) # Pretrain task
+        input_ids = torch.tensor([self.tokenizer('<s_pretrain>')['input_ids'][1]]).to(self.device_env.device) # Pretrain task
         recursion_length = 0
         prob_arr = []
         with torch.inference_mode():
@@ -342,11 +342,14 @@ class TaskCrullerPretrain(TaskTrain):
         text_input = text_input[:, :-1].to(self.device_env.device, non_blocking=True)
         text_target = text_target[:, 1:].to(self.device_env.device, non_blocking=True)
         with torch.inference_mode():
-            image_encoding = self.model.image_encoder(image_input)
-            print(f"image encoding shape for eval is now {image_encoding.shape}")
-            ocr_predictions = self.generate_ocr(image_encoding)
+            output_inference = self.model.inference(image_tensors=image_input, prompt='<s_pretrain>'
+                                                    )
+            print(output_inference)
+            #image_encoding = self.model.image_encoder(image_input)
+            #print(f"image encoding shape for eval is now {image_encoding.shape}")
+            #ocr_predictions = self.generate_ocr(image_encoding)
 
-        return image_input, ocr_predictions
+        return image_input, output_inference
 
 
     def state_dict(self):
