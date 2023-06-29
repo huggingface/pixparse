@@ -126,12 +126,14 @@ class Monitor:
         self.wandb = None
         if wandb:
             if HAS_WANDB:
+                dir_ = os.path.join(self.output_dir, wandb_dir)
                 self.wandb = wandb.init(
                     project=wandb_project,
                     name=experiment_name,
                     config=hparams,
-                    dir=os.path.join(self.output_dir, wandb_dir)
+                    dir=dir_
                 )
+                _logger.info(f"Wandb found. Metrics are being logged to {dir_}")
             else:
                 _logger.warning(
                     "You've requested to log metrics to wandb but package not found. "
@@ -149,6 +151,7 @@ class Monitor:
             rate: Optional[Union[float, Tuple[float, float]]] = None,
             learning_rate: Optional[float] = None,
             phase_suffix: str = '',
+            ocr_check = None,
             **kwargs,
     ):
         """ log train/eval step
@@ -178,6 +181,32 @@ class Monitor:
         self.logger.info(log_str)
 
         if self.tensorboard is not None:
+            # Generate captions for some images, revert of https://github.com/huggingface/open-muse/blob/d30d864b2f17fd0b152037e10b73aeb2b1941e20/training/train_muse.py#L757
+            """
+                # In the beginning of training, the model is not fully trained and the generated token ids can be out of range
+                # so we clamp them to the correct range.
+                gen_token_ids = torch.clamp(gen_token_ids, max=accelerator.unwrap_model(model).config.codebook_size - 1)
+                images = vq_model.decode_code(gen_token_ids)
+                model.train()
+
+                if config.training.get("pre_encode", False):
+                    del vq_model
+
+                # Convert to PIL images
+                images = 2.0 * images - 1.0
+                images = torch.clamp(images, -1.0, 1.0)
+                images = (images + 1.0) / 2.0
+                images *= 255.0
+                images = images.permute(0, 2, 3, 1).cpu().numpy().astype(np.uint8)
+                pil_images = [Image.fromarray(image) for image in images]
+
+                # Log images
+                wandb_images = [wandb.Image(image, caption=validation_prompts[i]) for i, image in enumerate(pil_images)]
+                wandb.log({"generated_images": wandb_images}, step=global_step)
+                        self.wandb.log({phase_title: wandb_log}, step=step_idx)
+            """
+            if ocr_check is not None:
+                pass
             if loss is not None:
                 self.tensorboard.add_scalar('/'.join(['Loss', phase_title]), loss, step_idx)
             if learning_rate is not None:
@@ -191,7 +220,6 @@ class Monitor:
                 wandb_log['loss'] = loss
             if learning_rate:
                 wandb_log['learning_rate'] = learning_rate
-            self.wandb.log({phase_title: wandb_log}, step=step_idx)
 
     def log_phase(
             self,

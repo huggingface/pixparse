@@ -81,8 +81,41 @@ class TaskCrullerPretrain(TaskTrain):
         self.prompt_end_token = self.task_start_token
         self.max_position_embeddings = cfg.model.text_decoder.max_length
         self.text_anno_fn = False  # set for image-text dataset experiments
+        self.tokenizer = AutoTokenizer.from_pretrained(self.cfg.model.text_decoder.name)
+        # Setup task specific tokens
+        # NOTE: Donut appears to add tokens on the fly during dataset init, requires iterating
+        # through full dataset on train start due to not being able to update once tokenizers
+        # passed through to dataloader processes, we should store this all in configs up front
+        special_tokens = [
+            "<sep/>",  # JSON list separator
+            self.task_start_token,  # task start (based on dataset/task)
+            self.prompt_end_token,  # prompt end (or task_start for pretrain)
+        ]
+        newly_added_num = self.tokenizer.add_special_tokens(
+            {"additional_special_tokens": sorted(set(special_tokens))}
+        )
 
-        self.model = Cruller(cfg.model)  # FIXME would be good to defer weight init here
+        self.vocab_size = len(self.tokenizer)
+
+        preproc_fn = preprocess_text_anno if self.text_anno_fn else preprocess_ocr_anno
+        self.anno_preprocess_train = partial(
+            preproc_fn,
+            tokenizer=self.tokenizer,
+            max_position_embeddings=self.max_position_embeddings,
+            task_start_token=self.task_start_token,
+            prompt_end_token=self.prompt_end_token,
+        )
+
+        self.anno_preprocess_eval = None
+
+
+
+        self.model = Cruller(cfg.model, tokenizer=self.tokenizer)  # FIXME would be good to defer weight init here
+
+        # We need to resize the token embeddings after the model has been initialized
+        if newly_added_num > 0:
+            self.model.text_decoder.trunk.resize_token_embeddings(len(self.tokenizer))
+        
         self.loss = nn.CrossEntropyLoss(ignore_index=-100)
         self.has_no_sync = False
         self.num_image_chs = 1 if cfg.model.image_encoder.image_fmt == 'L' else 3
@@ -103,34 +136,6 @@ class TaskCrullerPretrain(TaskTrain):
             )
         ])
         self.image_preprocess_eval = None
-
-        self.tokenizer = AutoTokenizer.from_pretrained(self.cfg.model.text_decoder.name)
-        # Setup task specific tokens
-        # NOTE: Donut appears to add tokens on the fly during dataset init, requires iterating
-        # through full dataset on train start due to not being able to update once tokenizers
-        # passed through to dataloader processes, we should store this all in configs up front
-        special_tokens = [
-            "<sep/>",  # JSON list separator
-            self.task_start_token,  # task start (based on dataset/task)
-            self.prompt_end_token,  # prompt end (or task_start for pretrain)
-        ]
-        newly_added_num = self.tokenizer.add_special_tokens(
-            {"additional_special_tokens": sorted(set(special_tokens))}
-        )
-        if newly_added_num > 0:
-            self.model.text_decoder.trunk.resize_token_embeddings(len(self.tokenizer))
-        self.vocab_size = len(self.tokenizer)
-
-        preproc_fn = preprocess_text_anno if self.text_anno_fn else preprocess_ocr_anno
-        self.anno_preprocess_train = partial(
-            preproc_fn,
-            tokenizer=self.tokenizer,
-            max_position_embeddings=self.max_position_embeddings,
-            task_start_token=self.task_start_token,
-            prompt_end_token=self.prompt_end_token,
-        )
-
-        self.anno_preprocess_eval = None
 
         # FIXME train/eval metrics and meters
         self.train_metrics = {}
@@ -278,6 +283,9 @@ class TaskCrullerPretrain(TaskTrain):
         self.optimizer.zero_grad()
 
         if self.step % 100 == 0:
+            images, ocr_predictions, metrics = self.eval_step(sample)
+            # Generate some OCR for some images
+            self.ocr_check = (images, ocr_predictions)
             self.monitor.log_step(
                 'train',
                 step_idx=self.step,
@@ -285,12 +293,61 @@ class TaskCrullerPretrain(TaskTrain):
                 interval=self.interval_idx,
                 loss=loss.item(),
                 lr=self.get_current_lr(),
+                ocr_check = self.ocr_check
             )
 
         return result
+    
+    def get_next_token(self, next_token_logits, use_sample=True, temperature:float = 5):
+        if use_sample:
+            relevant_logits = next_token_logits / temperature
+            probs = nn.functional.softmax(relevant_logits, dim=-1)
+            
+            next_token_id = torch.multinomial(
+                probs, num_samples=1
+            ).reshape(-1).unsqueeze(-1)
+        else:
+            next_token_id = next_token_logits.argmax(1).unsqueeze(-1)
+        return next_token_id, probs
+
+    def generate_ocr(self, encoder_outputs):
+        input_ids = torch.tensor([self.tokenizer('<s_pretrain>')['input_ids'][1]]) # Pretrain task
+        recursion_length = 0
+        prob_arr = []
+        with torch.inference_mode():
+            while True:
+                print(input_ids, input_ids.shape)
+                
+                inputs = self.model.text_decoder.prepare_inputs_for_inference(input_ids=input_ids, encoder_outputs=encoder_outputs)
+                print(inputs)
+                outputs = self.model.text_decoder.forward(**inputs)
+            
+                next_token_logits = outputs.logits[:, -1, :]
+                next_token_id, probs = self.get_next_token(next_token_logits)
+                prob_arr.append(probs.numpy())
+            
+                if next_token_id.item() == self.tokenizer.eos_token_id or recursion_length > 5:
+                    break
+                recursion_length += 1
+                input_ids = torch.cat([input_ids, next_token_id], dim=-1)
+        generated_text = self.tokenizer.decode(input_ids[0])
+        return generated_text
 
     def eval_step(self, sample):
-        pass
+        # Eval step on the same samples of train set.
+        image_input, text_input, text_target = sample
+        print(f"image and text shape for eval is  {image_input.shape, text_input.shape}")
+
+        image_input = image_input.to(self.device_env.device, non_blocking=True)
+        text_input = text_input[:, :-1].to(self.device_env.device, non_blocking=True)
+        text_target = text_target[:, 1:].to(self.device_env.device, non_blocking=True)
+        with torch.inference_mode():
+            image_encoding = self.model.image_encoder(image_input)
+            print(f"image encoding shape for eval is now {image_encoding.shape}")
+            ocr_predictions = self.generate_ocr(image_encoding)
+
+        return image_input, ocr_predictions
+
 
     def state_dict(self):
         sd = {}

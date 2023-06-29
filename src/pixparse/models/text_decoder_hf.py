@@ -74,7 +74,7 @@ class TextDecoderHf(nn.Module):
             "attention_mask": attention_mask,
             "past_key_values": past_key_values,
             "use_cache": use_cache,
-            "encoder_hidden_states": encoder_outputs.last_hidden_state,
+            "encoder_hidden_states": encoder_outputs #.last_hidden_state, #FIXME for timm ViT encoder there is no last hidden state 
         }
         return output
 
