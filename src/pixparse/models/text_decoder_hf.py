@@ -2,9 +2,11 @@ from typing import Optional
 
 import torch
 import transformers
+from transformers.generation import GenerationMixin
 from torch import nn as nn
 
 from pixparse.models.config import TextDecoderCfg
+
 
 
 def create_text_decoder(cfg: TextDecoderCfg) -> transformers.BartForCausalLM:  # FIXME for type hints
@@ -39,7 +41,7 @@ def create_text_decoder(cfg: TextDecoderCfg) -> transformers.BartForCausalLM:  #
     return model
 
 
-class TextDecoderHf(nn.Module):
+class TextDecoderHf(GenerationMixin, nn.Module):
 
     def __init__(self, cfg: TextDecoderCfg, tokenizer):
         super().__init__()
@@ -102,3 +104,6 @@ class TextDecoderHf(nn.Module):
             return_dict=return_dict,
         )
         return output
+
+    def generate(self):
+
