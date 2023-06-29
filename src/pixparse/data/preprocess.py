@@ -20,6 +20,7 @@ def preprocess_text_anno(
 
     tokenizer_fn = lambda x: tokenizer(
         x,
+        add_special_tokens=False,
         return_tensors='pt',
         max_length=max_position_embeddings,
         padding='max_length',
@@ -58,6 +59,7 @@ def preprocess_ocr_anno(
 
     tokenizer_fn = lambda x: tokenizer(
         x,
+        add_special_tokens=False,
         return_tensors='pt',
         max_length=max_position_embeddings,
         padding='max_length',
