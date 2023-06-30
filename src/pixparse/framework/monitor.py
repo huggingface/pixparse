@@ -5,6 +5,7 @@ from collections import OrderedDict
 from typing import Optional, Tuple, Dict, Union
 
 import torch
+from torch.utils.tensorboard.summary import image
 
 _logger = logging.getLogger(__name__)
 
@@ -151,7 +152,8 @@ class Monitor:
             rate: Optional[Union[float, Tuple[float, float]]] = None,
             learning_rate: Optional[float] = None,
             phase_suffix: str = '',
-            ocr_check = None,
+            metrics: dict = None,
+            eval_data: dict = None,
             **kwargs,
     ):
         """ log train/eval step
@@ -181,32 +183,22 @@ class Monitor:
         self.logger.info(log_str)
 
         if self.tensorboard is not None:
-            # Generate captions for some images, revert of https://github.com/huggingface/open-muse/blob/d30d864b2f17fd0b152037e10b73aeb2b1941e20/training/train_muse.py#L757
-            """
-                # In the beginning of training, the model is not fully trained and the generated token ids can be out of range
-                # so we clamp them to the correct range.
-                gen_token_ids = torch.clamp(gen_token_ids, max=accelerator.unwrap_model(model).config.codebook_size - 1)
-                images = vq_model.decode_code(gen_token_ids)
-                model.train()
+            if metrics is not None:
+                for metric_category, metric_items in metrics.items():
+                    for metric_name, metric_value in metric_items.items():
+                        self.tensorboard.add_scalar('/'.join([metric_category, metric_name, phase_title]), metric_value, step_idx)
+            if eval_data is not None:
+                for eval_data_category, eval_data_triplet in eval_data.items():
+                    if eval_data_category == 'ocr_reconstruction_data':
+                        # Add an image, its text, and its reconstructed text, revert of https://github.com/huggingface/open-muse/blob/d30d864b2f17fd0b152037e10b73aeb2b1941e20/training/train_muse.py#L757
+                        image_tag = '/'.join([eval_data_category, 'image', phase_title])
+                        # Hack to avoid caffe2 import errors in tensorboard
+                        # This avoids checking for image names
+                        self.tensorboard._get_file_writer().add_summary(image(image_tag, eval_data_triplet['image'], dataformats="CHW"), step_idx)
+                        self.tensorboard.add_text('/'.join([eval_data_category, 'original_text', phase_title]), eval_data_triplet['original_text'], step_idx)
+                        self.tensorboard.add_text('/'.join([eval_data_category, 'reconstructed_text', phase_title]), eval_data_triplet['reconstructed_text'], step_idx)
 
-                if config.training.get("pre_encode", False):
-                    del vq_model
 
-                # Convert to PIL images
-                images = 2.0 * images - 1.0
-                images = torch.clamp(images, -1.0, 1.0)
-                images = (images + 1.0) / 2.0
-                images *= 255.0
-                images = images.permute(0, 2, 3, 1).cpu().numpy().astype(np.uint8)
-                pil_images = [Image.fromarray(image) for image in images]
-
-                # Log images
-                wandb_images = [wandb.Image(image, caption=validation_prompts[i]) for i, image in enumerate(pil_images)]
-                wandb.log({"generated_images": wandb_images}, step=global_step)
-                        self.wandb.log({phase_title: wandb_log}, step=step_idx)
-            """
-            if ocr_check is not None:
-                pass
             if loss is not None:
                 self.tensorboard.add_scalar('/'.join(['Loss', phase_title]), loss, step_idx)
             if learning_rate is not None:

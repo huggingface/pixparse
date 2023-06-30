@@ -2,7 +2,7 @@ from typing import Optional
 
 import torch
 import transformers
-from transformers.generation import GenerationMixin
+from transformers.modeling_utils import PreTrainedModel 
 from torch import nn as nn
 
 from pixparse.models.config import TextDecoderCfg
@@ -33,20 +33,20 @@ def create_text_decoder(cfg: TextDecoderCfg) -> transformers.BartForCausalLM:  #
         model = transformers.AutoModelForCausalLM.from_config(
             config,
         )
-
-    # FIXME not sure if this is needed or what best approach is? Seems a bit of a Donut hack...
-    # Yep looks like it
     model.model.decoder.embed_tokens.padding_idx = cfg.pad_token_id
 
     return model
 
 
-class TextDecoderHf(GenerationMixin, nn.Module):
+class TextDecoderHf(nn.Module):
 
     def __init__(self, cfg: TextDecoderCfg, tokenizer):
         super().__init__()
+        cfg.pad_token_id = tokenizer.pad_token_id # Pass along tokenizer params
+
         self.trunk = create_text_decoder(cfg)
         self.tokenizer = tokenizer
+        self.prepare_inputs_for_generation = self.prepare_inputs_for_inference
 
     def prepare_inputs_for_inference(
             self,

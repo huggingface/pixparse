@@ -27,6 +27,7 @@ class TaskTrain(Task):
 
         self.num_intervals = cfg.num_intervals
         self.num_warmup_intervals = cfg.num_warmup_intervals
+        self.eval_frequency = cfg.eval_frequency
         self.num_steps_per_interval = None  # uninitialized, needs dataset info
         self.start_interval = 0
 

@@ -2,7 +2,7 @@ import logging
 from contextlib import nullcontext
 from dataclasses import dataclass, field
 from functools import partial
-from typing import Optional
+from typing import Optional, List, Any
 
 import torch
 import torch.nn as nn
@@ -18,6 +18,13 @@ from timm.scheduler import create_scheduler_v2
 from pixparse.framework import TaskTrainCfg, TaskTrain, DeviceEnv, Monitor
 from pixparse.models import Cruller, ModelCfg, get_model_config
 from pixparse.data import preprocess_ocr_anno, preprocess_text_anno
+
+from jiwer import cer, wer
+import jiwer.transforms as tr
+
+
+
+
 
 _logger = logging.getLogger(__name__)
 
@@ -106,10 +113,6 @@ class TaskCrullerPretrain(TaskTrain):
             prompt_end_token=self.prompt_end_token,
         )
 
-        self.anno_preprocess_eval = None
-
-
-
         self.model = Cruller(cfg.model, tokenizer=self.tokenizer)  # FIXME would be good to defer weight init here
 
         # We need to resize the token embeddings after the model has been initialized
@@ -137,9 +140,14 @@ class TaskCrullerPretrain(TaskTrain):
         ])
         self.image_preprocess_eval = None
 
-        # FIXME train/eval metrics and meters
-        self.train_metrics = {}
+        # TODO These metrics have to be organized as dicts of dicts. 
+        # First level is the category, second level is the tag
+        # We have to make this clear
+        self.train_metrics = {} 
         self.eval_metrics = {}
+        self.max_recursion_length = 1000 #specific to Cruller for generation
+
+
 
     def train_setup(
             self,
@@ -282,10 +290,13 @@ class TaskCrullerPretrain(TaskTrain):
         self.scheduler.step_update(self.step)
         self.optimizer.zero_grad()
 
-        if self.step % 100 == 0:
-            images, ocr_predictions, metrics = self.eval_step(sample)
-            # Generate some OCR for some images
-            self.ocr_check = (images, ocr_predictions)
+        if self.step % self.eval_frequency == 0:
+            #FIXME redundancy with the evaluate() method that is task-level.
+            # This is done on train set examples.
+            metrics, eval_gallery = self.eval_step(sample) 
+
+            self.train_metrics |= metrics
+
             self.monitor.log_step(
                 'train',
                 step_idx=self.step,
@@ -293,12 +304,13 @@ class TaskCrullerPretrain(TaskTrain):
                 interval=self.interval_idx,
                 loss=loss.item(),
                 lr=self.get_current_lr(),
-                ocr_check = self.ocr_check
+                metrics=self.train_metrics,
+                eval_data=eval_gallery
             )
 
         return result
     
-    def get_next_token(self, next_token_logits, use_sample=True, temperature:float = 5):
+    def get_next_token(self, next_token_logits, use_sample:bool=True, temperature:float = 5):
         if use_sample:
             relevant_logits = next_token_logits / temperature
             probs = nn.functional.softmax(relevant_logits, dim=-1)
@@ -308,48 +320,108 @@ class TaskCrullerPretrain(TaskTrain):
             ).reshape(-1).unsqueeze(-1)
         else:
             next_token_id = next_token_logits.argmax(1).unsqueeze(-1)
+            probs = torch.ones_like(next_token_logits)
         return next_token_id, probs
 
-    def generate_ocr(self, encoder_outputs):
-        input_ids = torch.tensor([self.tokenizer('<s_pretrain>')['input_ids'][1]]).to(self.device_env.device) # Pretrain task
-        recursion_length = 0
-        prob_arr = []
+    def generate_ocr(self, encoder_outputs: torch.FloatTensor) -> List[str]:
+        """
+        This function takes outputs from the image processing stack and returns generated text. 
+        """
         with torch.inference_mode():
-            while True:
-                print(input_ids, input_ids.shape)
-                
-                inputs = self.model.text_decoder.prepare_inputs_for_inference(input_ids=input_ids, encoder_outputs=encoder_outputs)
-                print(inputs)
-                outputs = self.model.text_decoder.forward(**inputs)
+            # FIXME this allows to escape DDP scope for inference
+            if isinstance(self.model, torch.nn.parallel.DistributedDataParallel):
+                self.model_attr_accessor = self.model.module
+            else:
+                self.model_attr_accessor = self.model
+            # Initial input for each sample in the batch is the start token
+            generated_tokens = self.get_generated_tokens(encoder_outputs)
+            generated_texts = [self.model_attr_accessor.text_decoder.tokenizer.decode(text) for text in generated_tokens.tolist()]
+        return generated_texts
+
+    def get_generated_tokens(self, encoder_outputs):
+        """
+        # TODO This "hacky" function should eventually be replaced by .generate() from GenerationMixin that does the same thing.
+        """
+        input_ids = torch.full((encoder_outputs.shape[0], 1), self.model_attr_accessor.text_decoder.tokenizer.cls_token_id).to(self.device_env.device)
             
-                next_token_logits = outputs.logits[:, -1, :]
-                next_token_id, probs = self.get_next_token(next_token_logits)
-                prob_arr.append(probs.numpy())
+        finished_samples = torch.zeros(input_ids.shape[0], dtype=torch.bool).to(self.device_env.device)
+        eos_token_id = torch.tensor(self.model_attr_accessor.text_decoder.tokenizer.eos_token_id).to(self.device_env.device)
+
+        for recursion_length in range(0, self.max_recursion_length):
+            inputs = self.model_attr_accessor.text_decoder.prepare_inputs_for_inference(input_ids=input_ids, encoder_outputs=encoder_outputs
+                )
+            outputs = self.model_attr_accessor.text_decoder.forward(**inputs)
+            next_token_logits = outputs.logits[:, -1, :]
+            next_token_id, _ = self.get_next_token(next_token_logits, use_sample=False)
+            finished_samples |= (next_token_id.squeeze() == eos_token_id)
             
-                if next_token_id.item() == self.tokenizer.eos_token_id or recursion_length > 5:
-                    break
-                recursion_length += 1
-                input_ids = torch.cat([input_ids, next_token_id], dim=-1)
-        generated_text = self.tokenizer.decode(input_ids[0])
-        return generated_text
+            if finished_samples.all():  # If all samples are finished, break out of the loop
+                break
+            input_ids = torch.cat([input_ids, next_token_id], dim=-1)
+        return input_ids
 
     def eval_step(self, sample):
-        # Eval step on the same samples of train set.
+        """
+        In cruller_pretrain, this task returns some utils logs useful to monitor training.
+        Typically we want to return a few samples of images 
+        and their generated OCR so that we can log them onto a tensorboard gallery in
+        the log_step
+        """
+        metrics = {}
+        eval_data = {}
         image_input, text_input, text_target = sample
-        print(f"image and text shape for eval is  {image_input.shape, text_input.shape}")
 
         image_input = image_input.to(self.device_env.device, non_blocking=True)
         text_input = text_input[:, :-1].to(self.device_env.device, non_blocking=True)
         text_target = text_target[:, 1:].to(self.device_env.device, non_blocking=True)
-        with torch.inference_mode():
-            output_inference = self.model.inference(image_tensors=image_input, prompt='<s_pretrain>'
-                                                    )
-            print(output_inference)
-            #image_encoding = self.model.image_encoder(image_input)
-            #print(f"image encoding shape for eval is now {image_encoding.shape}")
-            #ocr_predictions = self.generate_ocr(image_encoding)
 
-        return image_input, output_inference
+        # Add OCR-related metrics and generation
+
+        ocr_metrics, ocr_reconstructed_sample = self.get_ocr_metrics(image_input, text_input)
+        
+        metrics['ocr_reconstruction'] = ocr_metrics
+
+        eval_data['ocr_reconstruction_data'] = ocr_reconstructed_sample
+        
+        # TODO Add other metrics relevant for eval step
+        # 
+        # metrics['metric_category'] = ... 
+        return metrics, eval_data
+
+    def get_ocr_metrics(self, image_input, text_input):
+        cer_transforms = tr.Compose(
+            [
+                tr.RemoveSpecificWords("<pad>"),
+                tr.Strip(),
+                tr.ReduceToListOfListOfChars(),
+            ]
+        )
+
+        wer_transforms = tr.Compose(
+            [
+                tr.RemoveSpecificWords("<pad>"),
+                tr.RemoveMultipleSpaces(),
+                tr.Strip(),
+                tr.ReduceToListOfListOfWords(),
+            ]
+        )
+        ocr_pretraining_metrics = dict()
+        with torch.inference_mode():
+            with self.model.no_sync():  
+                if hasattr(self.model, 'module'): # hack for DDP inference
+                    self.model_attr_accessor = self.model.module
+                image_encoding = self.model_attr_accessor.image_encoder(image_input)
+                ocr_predictions = self.generate_ocr(encoder_outputs=image_encoding)
+                # FIXME here we need also to remove tokenizer from model. 
+                decoded_texts = [self.model_attr_accessor.text_decoder.tokenizer.decode(text) for text in text_input]                
+                # wer metrics
+                wer_output = wer(reference=decoded_texts, hypothesis=ocr_predictions, reference_transform=wer_transforms, hypothesis_transform=wer_transforms)
+                ocr_pretraining_metrics["wer"] = wer_output
+                cer_output = cer(reference=decoded_texts, hypothesis=ocr_predictions, reference_transform=cer_transforms, hypothesis_transform=cer_transforms)
+                ocr_pretraining_metrics["cer"] = cer_output
+                reconstructed_sample = {'image': image_input[0], 'original_text': decoded_texts[0], 'reconstructed_text': ocr_predictions[0]}
+        return ocr_pretraining_metrics, reconstructed_sample
+
 
 
     def state_dict(self):

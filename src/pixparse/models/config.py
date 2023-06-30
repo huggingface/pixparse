@@ -25,7 +25,7 @@ class TextDecoderCfg(Serializable):
     pretrained: bool = True
     num_decoder_layers: Optional[int] = 4
     max_length: Optional[int] = 1024
-    pad_token_id: Optional[int] = None  # not sure that this is needed or a good idea?
+    pad_token_id: Optional[int] = None
 
 
 @dataclass

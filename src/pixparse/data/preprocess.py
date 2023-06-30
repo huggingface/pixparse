@@ -15,8 +15,10 @@ def preprocess_text_anno(
         ignore_id: int = -100,
         generator=None,
 ):
-    # FIXME this is a temporary preprocess for image-text datasets during intial testing
-    text = task_start_token + anno['caption'] + tokenizer.eos_token
+    """
+    Simpler data preprocessing for raw-text data.
+    """
+    text = task_start_token + anno + tokenizer.eos_token
 
     tokenizer_fn = lambda x: tokenizer(
         x,
