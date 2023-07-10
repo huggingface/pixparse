@@ -33,25 +33,24 @@ def create_text_decoder(cfg: TextDecoderCfg) -> transformers.BartForCausalLM:  #
         model = transformers.AutoModelForCausalLM.from_config(
             config,
         )
-    model.model.decoder.embed_tokens.padding_idx = cfg.pad_token_id
+    # TODO Following is the donut hack. Unused without generate().
+    # model.model.decoder.embed_tokens.padding_idx = cfg.pad_token_id 
 
     return model
 
 
 class TextDecoderHf(nn.Module):
 
-    def __init__(self, cfg: TextDecoderCfg, tokenizer):
+    def __init__(self, cfg: TextDecoderCfg):
         super().__init__()
-        cfg.pad_token_id = tokenizer.pad_token_id # Pass along tokenizer params
-
         self.trunk = create_text_decoder(cfg)
-        self.tokenizer = tokenizer
         self.prepare_inputs_for_generation = self.prepare_inputs_for_inference
 
     def prepare_inputs_for_inference(
             self,
             input_ids: torch.Tensor,
             encoder_outputs: torch.Tensor,
+            pad_token_id: int,
             past_key_values=None,
             past=None,
             use_cache: bool = None,
@@ -68,7 +67,7 @@ class TextDecoderHf(nn.Module):
         # for compatibility with transformers==4.11.x
         if past is not None:
             past_key_values = past
-        attention_mask = input_ids.ne(self.tokenizer.pad_token_id).long()
+        attention_mask = input_ids.ne(pad_token_id).long()
         if past_key_values is not None:
             input_ids = input_ids[:, -1:]
         output = {

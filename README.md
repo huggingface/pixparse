@@ -11,6 +11,40 @@ Broadly focused on these model types:
 
 The training objectives and pretraining datasets will also be inspired by the associated papers above, but will mix and match. For example, we may train a Donut or PaLI-X style model with a Pix2Struct objective (masked document images w/ simplified HTML target text).
 
+## Usage
+
+To launch a training Cruller Task on IDL data, you would need these arguments in these scopes.
+
+```bash
+python -m pixparse.app.train \
+  --data.train.source "pipe:aws s3 cp s3://url-to-IDL-webdataset-shards/idl_shard-00{000..699}.tar -" \
+  --data.train.batch-size 8 \
+  --data.train.num-samples 800000 \
+  --data.train.num-workers 8 \
+  --task.model-name cruller_large \
+  --task.opt.clip-grad-value 1.0 \
+  --task.opt.clip-grad-mode norm \
+  --task.opt.learning-rate 3e-4 \
+  --task.opt.grad-accum-steps 1 \
+  --task.opt.betas 0.9 0.98 \
+  --task.dtype bfloat16 \
+  --task.num-intervals 30 \
+  --task.num-warmup-intervals 3 \
+  --train.checkpoint-dir <your_checkpoint_dir> \
+  --train.output-dir <where logs and tb files are created> \
+  --train.experiment awesome_experiment\
+  --train.tensorboard True \
+  --train.log-eval-data False \
+  --train.wandb False \
+  --train.log-filename out.log
+
+```
+
+To launch evaluation on existing logs, you need to use a Cruller Eval Task:
+
+```bash
+WIP
+```
 ## Updates
 
 2023-06-14

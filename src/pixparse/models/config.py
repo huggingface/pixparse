@@ -6,6 +6,7 @@ from typing import Optional, Tuple
 
 from simple_parsing.helpers import Serializable
 
+from pixparse.utils.name_utils import _natural_key, clean_name
 
 _MODEL_CONFIG_PATHS = [Path(__file__).parent / f"configs/"]
 _MODEL_CONFIGS = {}  # model_name: config
@@ -25,17 +26,12 @@ class TextDecoderCfg(Serializable):
     pretrained: bool = True
     num_decoder_layers: Optional[int] = 4
     max_length: Optional[int] = 1024
-    pad_token_id: Optional[int] = None
-
+    pad_token_id: Optional[int] = None # FIXME move this to TokenizerCfg?
 
 @dataclass
 class ModelCfg(Serializable):
     image_encoder: ImageEncoderCfg = field(default_factory=ImageEncoderCfg)
     text_decoder: TextDecoderCfg = field(default_factory=TextDecoderCfg)
-
-
-def _natural_key(string_):
-    return [int(s) if s.isdigit() else s for s in re.split(r'(\d+)', string_.lower())]
 
 
 def _scan_model_configs():
@@ -60,18 +56,12 @@ def _scan_model_configs():
 _scan_model_configs()  # initial populate of model config registry
 
 
-def clean_model_name(name):
-    name = name.replace('/', '_')
-    name = name.replace('-', '_')
-    return name
-
-
 def list_models():
     """ enumerate available model architectures based on config files """
     return list(_MODEL_CONFIGS.keys())
 
 
 def get_model_config(model_name):
-    model_name = clean_model_name(model_name)
+    model_name = clean_name(model_name)
     cfg = _MODEL_CONFIGS.get(model_name, None)
     return copy.deepcopy(cfg)

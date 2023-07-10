@@ -104,7 +104,25 @@ class Monitor:
             tensorboard=False,
             tensorboard_dir='tensorboard',
             output_enabled=True,
+            log_eval_data=False,
     ):
+        """
+        A monitoring utility for logging experimental metrics and results to various destinations, such as CSV files,
+        Tensorboard, or Weights & Biases (wandb). Allows logging image data and associated text for OCR generation.
+
+        Args:
+            experiment_name (str, optional): The name of the experiment. Used as the run name in wandb. Defaults to None.
+            output_dir (str, optional): The directory for output files (CSV logs, Tensorboard logs, etc). Defaults to None.
+            logger (Logger, optional): A custom logger instance. Defaults to None.
+            hparams (dict, optional): Hyperparameters for the experiment. Used as the config in wandb. Defaults to an empty dict.
+            wandb (bool, optional): Flag to enable wandb logging. Defaults to False.
+            wandb_project (str, optional): The name of the wandb project. Defaults to 'unknown'.
+            wandb_dir (str, optional): The directory for wandb output. Relative to `output_dir`. Defaults to 'wandb'.
+            tensorboard (bool, optional): Flag to enable Tensorboard logging. Defaults to False.
+            tensorboard_dir (str, optional): The directory for Tensorboard output. Relative to `output_dir`. Defaults to 'tensorboard'.
+            output_enabled (bool, optional): Flag to enable output. If False, disables all output. Defaults to True.
+            log_eval_data (bool, optional): Flag to log evaluation data, can grow quite large in size. Defaults to False.
+        """
         self.output_dir = output_dir  # for tensorboard, csv, text file (TODO) logging
         self.logger = logger or logging.getLogger('log')
         hparams = hparams or {}
@@ -141,6 +159,7 @@ class Monitor:
                     "Metrics not being logged to wandb, try `pip install wandb`")
 
         self.output_enabled = output_enabled
+        self.log_eval_data = log_eval_data
 
     def log_step(
             self,
@@ -187,7 +206,7 @@ class Monitor:
                 for metric_category, metric_items in metrics.items():
                     for metric_name, metric_value in metric_items.items():
                         self.tensorboard.add_scalar('/'.join([metric_category, metric_name, phase_title]), metric_value, step_idx)
-            if eval_data is not None:
+            if (eval_data is not None) and self.log_eval_data:
                 for eval_data_category, eval_data_triplet in eval_data.items():
                     if eval_data_category == 'ocr_reconstruction_data':
                         # Add an image, its text, and its reconstructed text, revert of https://github.com/huggingface/open-muse/blob/d30d864b2f17fd0b152037e10b73aeb2b1941e20/training/train_muse.py#L757

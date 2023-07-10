@@ -4,6 +4,9 @@ from typing import Optional, Tuple
 
 @dataclass
 class OptimizationCfg:
+    """
+    This dataclass serves among others the task.opt arg set.
+    """
     optimizer: str = 'adamw'
     scheduler: str = 'cosine'
     learning_rate: float = 5e-4

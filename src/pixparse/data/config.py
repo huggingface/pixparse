@@ -18,6 +18,6 @@ class DatasetCfg:
 
 @dataclass
 class DataCfg:
-    train: DatasetCfg
+    train: Optional[DatasetCfg] = None
     eval: Optional[DatasetCfg] = None
 
