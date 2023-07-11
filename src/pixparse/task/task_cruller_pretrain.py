@@ -341,14 +341,14 @@ class TaskCrullerPretrain(TaskTrain):
         return metrics, eval_data
 
     def state_dict(self):
-        sd = {}
-        sd['model'] = self.model.state_dict()
-        sd['optimizer'] = self.optimizer.state_dict()
+        state_dicts = {}
+        state_dicts['model'] = self.model.state_dict()
+        state_dicts['optimizer'] = self.optimizer.state_dict()
         if hasattr(self.scheduler, 'state_dict'):
-            sd['scheduler'] = self.scheduler.state_dict()
+            state_dicts['scheduler'] = self.scheduler.state_dict()
         if self.scaler is not None:
-            sd['scaler'] = self.scaler.state_dict()
-        return sd
+            state_dicts['scaler'] = self.scaler.state_dict()
+        return state_dicts
 
     def load_state_dict(self, state_dict):
         pass

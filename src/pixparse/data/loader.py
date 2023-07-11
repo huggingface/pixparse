@@ -1,8 +1,9 @@
 
-from chug import create_wds_loader, create_doc_anno_pipe
+from chug import create_wds_loader, create_doc_anno_pipe, create_image_text_pipe
 
 from .config import DatasetCfg
 
+from typing import Callable
 
 def create_loader(
         cfg: DatasetCfg,
@@ -13,8 +14,9 @@ def create_loader(
         image_fmt='L',
         seed: int = 0,
         world_size: int = 1,
+        create_decoder_pipe: Callable = create_doc_anno_pipe,
 ):
-    decoder = create_doc_anno_pipe(
+    decoder = create_decoder_pipe(
         image_preprocess=image_preprocess,
         anno_preprocess=anno_preprocess,
         image_key=image_key,

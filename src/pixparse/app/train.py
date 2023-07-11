@@ -14,6 +14,7 @@ from pixparse.framework import DeviceEnv, Monitor, train_one_interval, evaluate,
 from pixparse.utils.name_utils import clean_name
 from pixparse.task import TaskCrullerPretrain, TaskCrullerPretrainCfg
 
+from chug.webdataset import create_doc_anno_pipe
 _logger = logging.getLogger('train')
 
 
@@ -49,14 +50,6 @@ def train(
             task,
             loaders['train'],
         )
-
-        if 'eval' in loaders:
-            metrics = evaluate( 
-                task,
-                loaders['eval']
-            )
-        else:
-            metrics = {}
 
         # save checkpoint
         # checkpointer.save(task, metrics, interval)
@@ -145,15 +138,9 @@ def main():
         anno_preprocess=task.anno_preprocess_train,
         image_fmt=task_cfg.model.image_encoder.image_fmt,
         world_size=device_env.world_size,
+        create_decoder_pipe=create_doc_anno_pipe,
     )
-    if data_cfg.eval is not None:
-        loaders['eval'] = create_loader(
-            data_cfg.eval,
-            is_train=False,
-            image_preprocess=task.image_preprocess_eval,
-            anno_preprocess=task.anno_preprocess_eval,
-            #world_size=device_env.world_size
-        )
+
     task.train_setup(
         num_batches_per_interval=loaders['train'].num_batches,
     )
