@@ -54,7 +54,7 @@ def train(
         # save checkpoint
         # checkpointer.save(task, metrics, interval)
         if device_env.is_primary():
-            torch.save(task.state_dict(), os.path.join(cfg.checkpoint_dir, f'checkpoint-{i}.pt'))
+            torch.save(task.state_dict(), os.path.join(cfg.checkpoint_dir, cfg.experiment, f'checkpoint-{i}.pt'))
 
 
 parser = ArgumentParser(

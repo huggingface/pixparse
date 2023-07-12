@@ -40,11 +40,23 @@ python -m pixparse.app.train \
 
 ```
 
-To launch evaluation on existing logs, you need to use a Cruller Eval Task:
+To launch evaluation on existing checkpoints, you need to use a Cruller Eval Task, e.g. on FUNSD dataset:
 
 ```bash
-WIP
+python -m pixparse.app.eval \
+  --data.eval.source "pipe:aws s3 cp s3://.../FUNSD/FUNSD-000000.tar -" \
+  --data.eval.num-samples 200 \
+  --data.eval.batch-size 16 \
+  --data.eval.num-workers 8 \
+  --model-name cruller_large_6layers \
+  --task.dtype bfloat16 \
+  --s3-bucket pixparse-exps \
+  --eval.checkpoint-path 20230629-231529-model_cruller_large-lr_0.0003-b_12/checkpoints/checkpoint-29.pt \
+  --output-dir /fsx/pablo/
 ```
+
+metrics will be saved under output_dir, with a name derived from the checkpoint used. 
+
 ## Updates
 
 2023-06-14

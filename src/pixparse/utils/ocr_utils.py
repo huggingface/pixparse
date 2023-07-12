@@ -38,14 +38,16 @@ def get_ocr_metrics(model, tokenizer, image_input, text_input, device_env, max_r
     )
     ocr_pretraining_metrics = dict()
     with torch.inference_mode():
-        with model.no_sync():  
-            if hasattr(model, 'module'): # hack for DDP inference
-                model_attr_accessor = model.module
-            image_encoding = model_attr_accessor.image_encoder(image_input)
-            ocr_predictions = generate_ocr(model_attr_accessor, tokenizer, image_encoding, device_env, max_recursion_length)
-            decoded_texts = [tokenizer.trunk.decode(text) for text in text_input]                
-            ocr_pretraining_metrics = get_cer_wer_metrics(cer_transforms, wer_transforms, ocr_pretraining_metrics, ocr_predictions, decoded_texts)
-            reconstructed_sample = {'image': image_input[0], 'original_text': decoded_texts[0], 'reconstructed_text': ocr_predictions[0]}
+        #with model.no_sync():  
+        if hasattr(model, 'module'): # for DDP inference
+            model_attr_accessor = model.module
+        else:
+            model_attr_accessor = model
+        image_encoding = model_attr_accessor.image_encoder(image_input)
+        ocr_predictions = generate_ocr(model_attr_accessor, tokenizer, image_encoding, device_env, max_recursion_length)
+        decoded_texts = tokenizer.trunk.batch_decode(text_input)                
+        ocr_pretraining_metrics = get_cer_wer_metrics(cer_transforms, wer_transforms, ocr_pretraining_metrics, ocr_predictions, decoded_texts)
+        reconstructed_sample = {'image': image_input[0], 'original_text': decoded_texts[0], 'reconstructed_text': ocr_predictions[0]}
     return ocr_pretraining_metrics, reconstructed_sample
 
 def get_cer_wer_metrics(cer_transforms, wer_transforms, ocr_pretraining_metrics, ocr_predictions, decoded_texts):

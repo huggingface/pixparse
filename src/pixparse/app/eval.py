@@ -20,6 +20,8 @@ from pixparse.framework import (
     random_seed,
 )
 from pixparse.utils.name_utils import clean_name
+from pixparse.utils.s3_utils import load_checkpoint_from_s3
+
 from pixparse.task import (
     TaskCrullerPretrain,
     TaskCrullerPretrainCfg,
@@ -37,9 +39,8 @@ class EvalCfg:
     experiment: str = ""
     output_dir: str = "./output"
     log_filename: str = "out.log"
-    checkpoint_path: str = (
-        None  # input checkpoint full path FIXME should be expandable url
-    )
+    s3_bucket: str = ""
+    checkpoint_path: str = ""
     datasets: List[str] = field(
         default_factory=lambda: ["eval"]
     )  # Identifier of dataset to be used in eval.
@@ -57,7 +58,7 @@ def eval(
 
     metrics = evaluate(task, eval_loaders)
     # Do something with metrics, print them, log them, save them
-    with open(cfg.output_dir, "w") as f:
+    with open(os.path.join(cfg.output_dir, cfg.checkpoint_path.replace("/", "_"), "-metrics.json") , "w") as f:
         json.dump(metrics, f)
 
 
@@ -106,11 +107,18 @@ def main():
     checkpoint_path = eval_cfg.checkpoint_path
     eval_cfg = replace(eval_cfg, checkpoint_path=checkpoint_path)
 
-    assert os.path.isfile(
+    # FIXME check if path is local or s3?
+    if eval_cfg.s3_bucket != "":
+        _logger.info("s3 bucket specified. Loading checkpoint from s3.")
+        checkpoint = load_checkpoint_from_s3(
+                eval_cfg.s3_bucket, eval_cfg.checkpoint_path
+            )
+    else:
+        assert os.path.isfile(
         checkpoint_path
     ), f"Cannot find checkpoint {checkpoint_path}: File not found"
 
-    checkpoint = torch.load(eval_cfg.checkpoint_path)
+        checkpoint = torch.load(eval_cfg.checkpoint_path)
     state_dict = checkpoint["model"]
     # bypass DDP module
     eval_state_dict = {k.replace("module.", ""): v for k, v in state_dict.items()}
@@ -128,14 +136,6 @@ def main():
 
     loaders = {}
     assert data_cfg.eval is not None, f"data_cfg.eval is not set."
-    loaders["eval"] = create_loader(
-        data_cfg.eval,
-        is_train=False,
-        image_preprocess=task.image_preprocess_eval,
-        anno_preprocess=task.anno_preprocess_eval,
-        create_decoder_pipe=create_doc_anno_pipe,
-        # world_size=device_env.world_size
-    )
     loaders["eval_FUNSD"] = create_loader(
         data_cfg.eval,
         is_train=False,
@@ -144,6 +144,16 @@ def main():
         create_decoder_pipe=create_image_text_pipe,
         # world_size=device_env.world_size
     )
+    """
+    loaders["eval_FUNSD"] = create_loader(
+        data_cfg.eval,
+        is_train=False,
+        image_preprocess=task.image_preprocess_eval,
+        anno_preprocess=task.anno_preprocess_eval,
+        create_decoder_pipe=create_image_text_pipe,
+        # world_size=device_env.world_size
+    )
+    """
     task.setup()
 
     if device_env.is_primary():

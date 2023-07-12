@@ -138,6 +138,11 @@ class TaskCrullerEvalOCR(TaskEval):
         self.eval_metrics = {}
         self.max_recursion_length = 1000  # specific to Cruller for generation
 
+    def setup(self):
+        device = self.device_env.device
+        self.model.to(device)
+
+    
     def prepare_for_evaluation(self, loaders: dict[str, LoaderBundle]) -> dict[str, LoaderBundle]:
         loaders = {
             loader_key: loader
@@ -154,10 +159,11 @@ class TaskCrullerEvalOCR(TaskEval):
         """
         metrics = {}
         image_input, text_input, text_target = sample
-
+        text_input = [item[0] for item in text_input]
+        text_input = torch.stack(text_input, dim=0).to(self.device_env.device, non_blocking=True)
+        text_target = [item[0] for item in text_target]  # Unwrap tensors from inner lists
+        text_target = torch.stack(text_target, dim=0).to(self.device_env.device, non_blocking=True)
         image_input = image_input.to(self.device_env.device, non_blocking=True)
-        text_input = text_input[:, :-1].to(self.device_env.device, non_blocking=True)
-        text_target = text_target[:, 1:].to(self.device_env.device, non_blocking=True)
 
         # Add OCR-related metrics and generation
 
@@ -165,7 +171,7 @@ class TaskCrullerEvalOCR(TaskEval):
             model=self.model,
             tokenizer=self.tokenizer,
             image_input=image_input,
-            text_input=text_input,
+            text_input=text_target,
             device_env=self.device_env,
             max_recursion_length=self.max_recursion_length,
         )
