@@ -39,8 +39,10 @@ class EvalCfg:
     experiment: str = ""
     output_dir: str = "./output"
     log_filename: str = "out.log"
+    dataset_name: str = ""
     s3_bucket: str = ""
     checkpoint_path: str = ""
+    metrics_file_path: str = ""
     datasets: List[str] = field(
         default_factory=lambda: ["eval"]
     )  # Identifier of dataset to be used in eval.
@@ -58,7 +60,8 @@ def eval(
 
     metrics = evaluate(task, eval_loaders)
     # Do something with metrics, print them, log them, save them
-    with open(os.path.join(cfg.output_dir, cfg.checkpoint_path.replace("/", "_"), "-metrics.json") , "w") as f:
+    # FIXME how do we log metrics per dataset? 
+    with open(cfg.metrics_file_path , "w") as f:
         json.dump(metrics, f)
 
 
@@ -119,6 +122,14 @@ def main():
     ), f"Cannot find checkpoint {checkpoint_path}: File not found"
 
         checkpoint = torch.load(eval_cfg.checkpoint_path)
+
+    # Create safe metrics file path 
+
+    checkpoint_name = eval_cfg.checkpoint_path.replace('/', '-').replace('.pt', '')
+    metrics_file_name = f"{checkpoint_name}-{eval_cfg.dataset_name}-metrics.json"    
+    eval_cfg.metrics_file_path = os.path.join(eval_cfg.output_dir, metrics_file_name)
+
+
     state_dict = checkpoint["model"]
     # bypass DDP module
     eval_state_dict = {k.replace("module.", ""): v for k, v in state_dict.items()}
@@ -127,6 +138,8 @@ def main():
     if device_env.is_primary():
         _logger.info(task_cfg)
         _logger.info(eval_cfg)
+
+    # Instantiate eval task
 
     task = TaskCrullerEvalOCR(
         task_cfg,
@@ -164,6 +177,8 @@ def main():
         task,
         loaders,
     )
+
+    task.end()
 
 
 if __name__ == "__main__":

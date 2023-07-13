@@ -32,6 +32,9 @@ class TaskEval(Task):
 
     def step(self, sample: Dict[str, Any]) -> Dict[str, Any]:
         pass
+    
+    def end(self):
+        pass
 
 class TaskTrain(Task):
     def __init__(

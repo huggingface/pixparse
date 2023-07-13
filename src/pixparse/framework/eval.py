@@ -16,14 +16,9 @@ def evaluate(task: TaskEval, loaders):
         for index_batch, sample in enumerate(loader.loader):
             metrics[key][index_batch] = task.step(sample)
 
-        # for t in tasks:
-        # aggregate metrics for each loader
+        if hasattr(task, 'average_metrics'):
+            # This is the end/finalize method to aggregate metrics
+            averaged_metrics = task.average_metrics(metrics[key])
+            metrics[key] = {}
+            metrics[key]["average"] = averaged_metrics
     return metrics
-
-
-# end / finalize, etc during eval some metrics can be computed per step
-# and simply accumulated/averaged so the end result is used,
-#  but often, eval metrics need to be computed after seeing
-# all eval samples for a given dataset, caching outputs, etc.
-# The end/finalize fn would calculate final metrics,
-# clear any cached outputs, and return the metrics dict

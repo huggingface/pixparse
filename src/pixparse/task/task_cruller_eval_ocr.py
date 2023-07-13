@@ -14,7 +14,10 @@ from pixparse.data import preprocess_text_anno
 from pixparse.utils import get_ocr_metrics
 
 from chug.common import LoaderBundle
+
 _logger = logging.getLogger(__name__)
+
+import time
 
 
 @dataclass
@@ -138,12 +141,26 @@ class TaskCrullerEvalOCR(TaskEval):
         self.eval_metrics = {}
         self.max_recursion_length = 1000  # specific to Cruller for generation
 
+    def time_and_log(func):
+        """
+        Method decorator to log execution time
+        """
+        def wrapper(self, *args, **kwargs):
+            start_time = time.time()
+            result = func(self, *args, **kwargs)
+            end_time = time.time()
+            execution_time = end_time - start_time
+            _logger.info(f"Executed method {func.__name__} in {execution_time:.2f} seconds")
+            return result
+        return wrapper
+    
     def setup(self):
         device = self.device_env.device
         self.model.to(device)
 
-    
-    def prepare_for_evaluation(self, loaders: dict[str, LoaderBundle]) -> dict[str, LoaderBundle]:
+    def prepare_for_evaluation(
+        self, loaders: dict[str, LoaderBundle]
+    ) -> dict[str, LoaderBundle]:
         loaders = {
             loader_key: loader
             for loader_key, loader in loaders.items()
@@ -153,6 +170,7 @@ class TaskCrullerEvalOCR(TaskEval):
         return loaders
         # return loaders_and_tasks
 
+    @time_and_log
     def step(self, sample):
         """
         Does one step of evaluation for OCR.
@@ -160,9 +178,13 @@ class TaskCrullerEvalOCR(TaskEval):
         metrics = {}
         image_input, text_input, text_target = sample
         text_input = [item[0] for item in text_input]
-        text_input = torch.stack(text_input, dim=0).to(self.device_env.device, non_blocking=True)
-        text_target = [item[0] for item in text_target]  # Unwrap tensors from inner lists
-        text_target = torch.stack(text_target, dim=0).to(self.device_env.device, non_blocking=True)
+        text_input = torch.stack(text_input, dim=0).to(
+            self.device_env.device, non_blocking=True
+        )
+        text_target = [item[0] for item in text_target]
+        text_target = torch.stack(text_target, dim=0).to(
+            self.device_env.device, non_blocking=True
+        )
         image_input = image_input.to(self.device_env.device, non_blocking=True)
 
         # Add OCR-related metrics and generation
@@ -183,7 +205,22 @@ class TaskCrullerEvalOCR(TaskEval):
         # metrics['metric_category'] = ...
         return metrics
 
+    def average_metrics(self, metrics: dict):
+        wer_sum = 0
+        cer_sum = 0
+        for batch_metrics in metrics.values():
+            wer_sum += batch_metrics["ocr_reconstruction"]["wer"]
+            cer_sum += batch_metrics["ocr_reconstruction"]["cer"]
+
+        num_batches = len(metrics)
+        average_wer = wer_sum / num_batches
+        average_cer = cer_sum / num_batches
+
+        return {"ocr_reconstruction": {"wer": average_wer, "cer": average_cer}}
+
     def end(self):
+        # process metrics, average them out? now done in self.average_metrics, called in evaluate, maybe end() should be called in evaluate 
+        # TODO do that, call average_metrics in end
         pass
 
     def state_dict(self):
