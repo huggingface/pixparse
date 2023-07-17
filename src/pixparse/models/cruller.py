@@ -5,7 +5,6 @@ from .image_encoder_timm import ImageEncoderTimm
 from .text_decoder_hf import TextDecoderHf
 
 
-
 class Cruller(nn.Module):
     def __init__(self, cfg: ModelCfg):
         super().__init__()
@@ -20,3 +19,4 @@ class Cruller(nn.Module):
             return_dict=True,
         )
         return decoder_output
+

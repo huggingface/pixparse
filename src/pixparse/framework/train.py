@@ -3,7 +3,6 @@ import torch
 import os
 
 def train_one_interval(
-        cfg,
         task: TaskTrain,
         loader,
 ):

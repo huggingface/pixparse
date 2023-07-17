@@ -2,8 +2,7 @@ import logging
 import os
 import json
 from dataclasses import dataclass, replace, field
-from datetime import datetime
-from typing import Optional, List
+from typing import List
 
 import simple_parsing
 from simple_parsing import ArgumentParser
@@ -14,17 +13,13 @@ from pixparse.data import DataCfg, create_loader
 from pixparse.framework import (
     DeviceEnv,
     Monitor,
-    train_one_interval,
     evaluate,
     setup_logging,
     random_seed,
 )
-from pixparse.utils.name_utils import clean_name
 from pixparse.utils.s3_utils import load_checkpoint_from_s3
 
 from pixparse.task import (
-    TaskCrullerPretrain,
-    TaskCrullerPretrainCfg,
     TaskCrullerEvalOCR,
     TaskCrullerEvalOCRCfg,
 )

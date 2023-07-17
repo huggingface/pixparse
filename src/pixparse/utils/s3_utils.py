@@ -9,3 +9,4 @@ def load_checkpoint_from_s3(bucket_name: str, s3_file_key: str):
         f.seek(0)
         checkpoint = torch.load(f)
     return checkpoint
+

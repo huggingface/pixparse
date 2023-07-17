@@ -46,7 +46,6 @@ def train(
         # FIXME flatten interval loop to have one eval point
         #  i.e step intervals vs epoch intervals handled similarly?
         train_one_interval(
-            cfg,
             task,
             loaders['train'],
         )
@@ -54,7 +53,9 @@ def train(
         # save checkpoint
         # checkpointer.save(task, metrics, interval)
         if device_env.is_primary():
-            torch.save(task.state_dict(), os.path.join(cfg.checkpoint_dir, cfg.experiment, f'checkpoint-{i}.pt'))
+            checkpoint_dir =  os.path.join(cfg.checkpoint_dir, cfg.experiment)
+            os.makedirs(checkpoint_dir, exist_ok=True)
+            torch.save(task.state_dict(), os.path.join(checkpoint_dir, f'checkpoint-{i}.pt'))
 
 
 parser = ArgumentParser(

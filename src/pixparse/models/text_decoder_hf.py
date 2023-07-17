@@ -2,11 +2,9 @@ from typing import Optional
 
 import torch
 import transformers
-from transformers.modeling_utils import PreTrainedModel 
 from torch import nn as nn
 
 from pixparse.models.config import TextDecoderCfg
-
 
 
 def create_text_decoder(cfg: TextDecoderCfg) -> transformers.BartForCausalLM:  # FIXME for type hints
@@ -34,7 +32,7 @@ def create_text_decoder(cfg: TextDecoderCfg) -> transformers.BartForCausalLM:  #
             config,
         )
     # TODO Following is the donut hack. Unused without generate().
-    # model.model.decoder.embed_tokens.padding_idx = cfg.pad_token_id 
+    # model.model.decoder.embed_tokens.padding_idx = cfg.pad_token_id
 
     return model
 
@@ -75,7 +73,7 @@ class TextDecoderHf(nn.Module):
             "attention_mask": attention_mask,
             "past_key_values": past_key_values,
             "use_cache": use_cache,
-            "encoder_hidden_states": encoder_outputs #.last_hidden_state, #FIXME for timm ViT encoder there is no last hidden state 
+            "encoder_hidden_states": encoder_outputs #.last_hidden_state, #FIXME for timm ViT encoder there is no last hidden state
         }
         return output
 
