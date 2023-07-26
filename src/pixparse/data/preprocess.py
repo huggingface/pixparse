@@ -71,16 +71,22 @@ def preprocess_ocr_anno(
 
     # FIXME for initial behaviour we will randomly sample one of N pages
     # TODO determine if we want to train in multi-page mode, use another sampling strategy?
-    page_indices = [generator.randint(0, num_pages - 1)]
-    # page_indices = range(num_pages)
+    current_index = generator.randint(0, num_pages - 1)
+    if not anno['pages'][current_index]['text']:
+        current_index = get_next_valid_page_index(current_index, num_pages, anno)
+
+
+    page_indices = []
     text_pages = []
     target_pages = []
-    for i in page_indices:
+
+    n_wanted_pages = min(1, num_pages) #TODO increase that number for multipage processing
+
+    while len(text_pages) <= n_wanted_pages:
         # FIXME treating pages separately, this best approach or tokenize w/ page-break?
-        anno_page = anno['pages'][i]
+        anno_page = anno['pages'][current_index]
         if not anno_page['text']:
             raise RuntimeError("No text on page, skipping...")
-
         # FIXME see self.donut_model.json2token, task specific json tokenization for
         #  the non-pretrain tasks varies w/ differing special tokens and prompts
         text = '\n'.join(anno_page['text'])
@@ -96,5 +102,30 @@ def preprocess_ocr_anno(
 
         text_pages.append(text)
         target_pages.append(target)
+        page_indices.append(current_index)
+
+        current_index = get_next_valid_page_index(current_index, num_pages, anno)
+        
 
     return dict(text=text_pages, target=target_pages), dict(page_indices=page_indices, num_pages=num_pages, orig_text=orig_text)
+
+def get_next_valid_page_index(current_index: int, num_pages: int, anno: dict, retries: int=10):
+    """
+    Get the index of the next valid page which contains text. If it doesn't find any non empty page
+    after 'retries' attempts, it raises a RuntimeError.
+
+    Parameters:
+    current_index (int): Current page index.
+    num_pages (int): Total number of pages.
+    anno (dict): The annotation dictionary which contains the 'pages'.
+    retries (int): Number of maximum retries for a given document.
+
+    Returns:
+    int: The index of the next non empty page.
+    """
+    for _ in range(retries):
+        current_index = (current_index + 1) % num_pages  # Get the next index, wrap around to 0 if it exceeds num_pages (in case of random init)
+        anno_page = anno['pages'][current_index]
+        if anno_page['text']:
+            return current_index
+    raise RuntimeError(f"No non-empty page found after {retries} attempts")
