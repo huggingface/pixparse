@@ -75,7 +75,6 @@ def preprocess_ocr_anno(
 
 
     page_indices = []
-    # page_indices = range(num_pages)
     text_pages = []
     target_pages = []
 
@@ -110,17 +109,17 @@ def preprocess_ocr_anno(
 
 def get_next_valid_page_index(current_index: int, num_pages: int, anno: dict, retries: int=10):
     """
-    Get the index of the next valid page which contains text. If it doesn't find any valid page
+    Get the index of the next valid page which contains text. If it doesn't find any non empty page
     after 'retries' attempts, it raises a RuntimeError.
 
     Parameters:
-    current_index (int): The current page index.
-    num_pages (int): The total number of pages.
+    current_index (int): Current page index.
+    num_pages (int): Total number of pages.
     anno (dict): The annotation dictionary which contains the 'pages'.
     retries (int): Number of maximum retries for a given document.
 
     Returns:
-    int: The index of the next valid page.
+    int: The index of the next non empty page.
     """
     for _ in range(retries):
         current_index = (current_index + 1) % num_pages  # Get the next index, wrap around to 0 if it exceeds num_pages (in case of random init)
