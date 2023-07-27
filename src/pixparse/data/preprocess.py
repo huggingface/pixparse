@@ -82,7 +82,7 @@ def preprocess_ocr_anno(
 
     n_wanted_pages = min(1, num_pages) #TODO increase that number for multipage processing
 
-    while len(text_pages) <= n_wanted_pages:
+    while len(text_pages) < n_wanted_pages:
         # FIXME treating pages separately, this best approach or tokenize w/ page-break?
         anno_page = anno['pages'][current_index]
         if not anno_page['text']:
