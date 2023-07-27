@@ -1,7 +1,7 @@
 from dataclasses import dataclass
 from typing import Any, Dict, Optional
 
-from .config import TaskTrainCfg
+from .config import TaskTrainCfg, TaskEvalCfg
 from .device import DeviceEnv
 from .monitor import Monitor
 
@@ -15,6 +15,26 @@ class Task:
         self.device_env = device_env
         self.monitor = monitor
 
+class TaskEval(Task):  
+    def __init__(
+            self,
+            cfg: TaskEvalCfg,
+            device_env: DeviceEnv,
+            monitor: Monitor = None,
+    ):
+        super().__init__(device_env=device_env, monitor=monitor)
+    
+    def setup(self, *args, **kwargs):
+        pass
+
+    def prepare_for_evaluation(self):
+        pass
+
+    def step(self, sample: Dict[str, Any]) -> Dict[str, Any]:
+        pass
+    
+    def end(self):
+        pass
 
 class TaskTrain(Task):
     def __init__(
@@ -27,6 +47,7 @@ class TaskTrain(Task):
 
         self.num_intervals = cfg.num_intervals
         self.num_warmup_intervals = cfg.num_warmup_intervals
+        self.eval_frequency = cfg.eval_frequency
         self.num_steps_per_interval = None  # uninitialized, needs dataset info
         self.start_interval = 0
 
@@ -54,6 +75,7 @@ class TaskTrain(Task):
         pass
 
     def eval_step(self, sample: Dict[str, Any]) -> Dict[str, Any]:
+        # TODO Remove eval method from train dataclass
         pass
 
     def get_current_lr(self):

@@ -1,14 +1,12 @@
 import logging
 from contextlib import nullcontext
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, asdict
 from functools import partial
-from typing import Optional
+from typing import Optional, List, Any
 
 import torch
 import torch.nn as nn
 import torchvision.transforms as transforms
-
-from transformers import AutoTokenizer
 
 import timm
 import timm.utils
@@ -17,7 +15,11 @@ from timm.scheduler import create_scheduler_v2
 
 from pixparse.framework import TaskTrainCfg, TaskTrain, DeviceEnv, Monitor
 from pixparse.models import Cruller, ModelCfg, get_model_config
+from pixparse.tokenizers import TokenizerHF, TokenizerCfg
 from pixparse.data import preprocess_ocr_anno, preprocess_text_anno
+from pixparse.utils.ocr_utils import get_ocr_metrics
+
+
 
 _logger = logging.getLogger(__name__)
 
@@ -30,8 +32,9 @@ _logger = logging.getLogger(__name__)
 class TaskCrullerPretrainCfg(TaskTrainCfg):
     model_name: Optional[str] = None  # if model_name set, loads a pre-defined config in models/configs
     model: ModelCfg = field(default_factory=ModelCfg)  # FIXME rename model_cfg to diff from model_name?
-    # tokenizer = ?  # FIXME tokenizer config needed?
+    tokenizer: TokenizerCfg = field(default_factory=TokenizerCfg)
 
+  
     def __post_init__(self):
         # FIXME figure out how to get command line args to overlay on top pre-defined
         # config but ONLY if they are specified on cmd line?
@@ -43,7 +46,6 @@ class TaskCrullerPretrainCfg(TaskTrainCfg):
                 self.model = model
         else:
             self.model_name = 'custom'
-
 
 class TaskCrullerPretrain(TaskTrain):
     """ Cruller Pretraining Task
@@ -81,8 +83,38 @@ class TaskCrullerPretrain(TaskTrain):
         self.prompt_end_token = self.task_start_token
         self.max_position_embeddings = cfg.model.text_decoder.max_length
         self.text_anno_fn = False  # set for image-text dataset experiments
+        self.tokenizer = TokenizerHF(cfg.tokenizer)
+        
+        # Setup task specific tokens
+        # NOTE: Donut appears to add tokens on the fly during dataset init, requires iterating
+        # through full dataset on train start due to not being able to update once tokenizers
+        # passed through to dataloader processes, we should store this all in configs up front
+        special_tokens = [
+            "<sep/>",  # JSON list separator
+            self.task_start_token,  # task start (based on dataset/task)
+            self.prompt_end_token,  # prompt end (or task_start for pretrain)
+        ]
+        newly_added_num = self.tokenizer.trunk.add_special_tokens(
+            {"additional_special_tokens": sorted(set(special_tokens))}
+        )
+
+        self.vocab_size = len(self.tokenizer.trunk)
+
+        preproc_fn = preprocess_text_anno if self.text_anno_fn else preprocess_ocr_anno
+        self.anno_preprocess_train = partial(
+            preproc_fn,
+            tokenizer=self.tokenizer.trunk,
+            max_position_embeddings=self.max_position_embeddings,
+            task_start_token=self.task_start_token,
+            prompt_end_token=self.prompt_end_token,
+        )
 
         self.model = Cruller(cfg.model)  # FIXME would be good to defer weight init here
+
+        # We need to resize the token embeddings after the model has been initialized
+        if newly_added_num > 0:
+            self.model.text_decoder.trunk.resize_token_embeddings(len(self.tokenizer.trunk))
+        
         self.loss = nn.CrossEntropyLoss(ignore_index=-100)
         self.has_no_sync = False
         self.num_image_chs = 1 if cfg.model.image_encoder.image_fmt == 'L' else 3
@@ -104,37 +136,14 @@ class TaskCrullerPretrain(TaskTrain):
         ])
         self.image_preprocess_eval = None
 
-        self.tokenizer = AutoTokenizer.from_pretrained(self.cfg.model.text_decoder.name)
-        # Setup task specific tokens
-        # NOTE: Donut appears to add tokens on the fly during dataset init, requires iterating
-        # through full dataset on train start due to not being able to update once tokenizers
-        # passed through to dataloader processes, we should store this all in configs up front
-        special_tokens = [
-            "<sep/>",  # JSON list separator
-            self.task_start_token,  # task start (based on dataset/task)
-            self.prompt_end_token,  # prompt end (or task_start for pretrain)
-        ]
-        newly_added_num = self.tokenizer.add_special_tokens(
-            {"additional_special_tokens": sorted(set(special_tokens))}
-        )
-        if newly_added_num > 0:
-            self.model.text_decoder.trunk.resize_token_embeddings(len(self.tokenizer))
-        self.vocab_size = len(self.tokenizer)
-
-        preproc_fn = preprocess_text_anno if self.text_anno_fn else preprocess_ocr_anno
-        self.anno_preprocess_train = partial(
-            preproc_fn,
-            tokenizer=self.tokenizer,
-            max_position_embeddings=self.max_position_embeddings,
-            task_start_token=self.task_start_token,
-            prompt_end_token=self.prompt_end_token,
-        )
-
-        self.anno_preprocess_eval = None
-
-        # FIXME train/eval metrics and meters
-        self.train_metrics = {}
+        # TODO These metrics have to be organized as dicts of dicts. 
+        # First level is the category, second level is the tag
+        # We have to make this clear
+        self.train_metrics = {} 
         self.eval_metrics = {}
+        self.max_recursion_length = 1000 #specific to Cruller for generation
+
+
 
     def train_setup(
             self,
@@ -277,7 +286,11 @@ class TaskCrullerPretrain(TaskTrain):
         self.scheduler.step_update(self.step)
         self.optimizer.zero_grad()
 
-        if self.step % 100 == 0:
+        if self.step % self.eval_frequency == 0:
+            metrics, eval_gallery = self.get_train_ocr_metrics(sample) 
+
+            self.train_metrics |= metrics
+
             self.monitor.log_step(
                 'train',
                 step_idx=self.step,
@@ -285,22 +298,78 @@ class TaskCrullerPretrain(TaskTrain):
                 interval=self.interval_idx,
                 loss=loss.item(),
                 lr=self.get_current_lr(),
+                metrics=self.train_metrics,
+                eval_data=eval_gallery
             )
 
         return result
+    
 
-    def eval_step(self, sample):
-        pass
+    def get_train_ocr_metrics(self, sample):
+        """
+        In cruller_pretrain, this task returns some utils logs useful to monitor training.
+        Typically we want to return a few samples of images 
+        and their generated OCR so that we can log them onto a tensorboard gallery in
+        the log_step
+        """
+        metrics = {}
+        eval_data = {}
+        image_input, text_input, text_target = sample
+
+        image_input = image_input.to(self.device_env.device, non_blocking=True)
+        text_input = text_input[:, :-1].to(self.device_env.device, non_blocking=True)
+        text_target = text_target[:, 1:].to(self.device_env.device, non_blocking=True)
+
+        """
+        metrics = {}
+        image_input, text_input, text_target = sample
+        text_input = [item[0] for item in text_input]
+        text_input = torch.stack(text_input, dim=0).to(self.device_env.device, non_blocking=True)
+        text_target = [item[0] for item in text_target]
+        text_target = torch.stack(text_target, dim=0).to(self.device_env.device, non_blocking=True)
+        image_input = image_input.to(self.device_env.device, non_blocking=True)
+
+        # Add OCR-related metrics and generation
+
+        ocr_metrics, _ = get_ocr_metrics(
+            model=self.model,
+            tokenizer=self.tokenizer,
+            image_input=image_input,
+            text_input=text_target,
+            device_env=self.device_env,
+            max_recursion_length=self.max_recursion_length,
+        )"""
+
+        # Add OCR-related metrics and generation
+
+        ocr_metrics, ocr_reconstructed_sample = get_ocr_metrics(
+            model=self.model,
+            tokenizer=self.tokenizer,
+            image_input=image_input,
+            text_input=text_target,
+            device_env=self.device_env,
+            max_recursion_length=self.max_recursion_length
+            )
+        if ocr_metrics and ocr_reconstructed_sample:
+            metrics['ocr_reconstruction'] = ocr_metrics
+            eval_data['ocr_reconstruction_data'] = ocr_reconstructed_sample
+        else:
+            _logger.info("Can't generate text from current batch. Skipping metrics...")
+        
+        # TODO Add other metrics relevant for eval step
+        # 
+        # metrics['metric_category'] = ... 
+        return metrics, eval_data
 
     def state_dict(self):
-        sd = {}
-        sd['model'] = self.model.state_dict()
-        sd['optimizer'] = self.optimizer.state_dict()
+        state_dicts = {}
+        state_dicts['model'] = self.model.state_dict()
+        state_dicts['optimizer'] = self.optimizer.state_dict()
         if hasattr(self.scheduler, 'state_dict'):
-            sd['scheduler'] = self.scheduler.state_dict()
+            state_dicts['scheduler'] = self.scheduler.state_dict()
         if self.scaler is not None:
-            sd['scaler'] = self.scaler.state_dict()
-        return sd
+            state_dicts['scaler'] = self.scaler.state_dict()
+        return state_dicts
 
     def load_state_dict(self, state_dict):
         pass

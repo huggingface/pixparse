@@ -1,2 +1,2 @@
-from .config import ModelCfg, ImageEncoderCfg, TextDecoderCfg, get_model_config, list_models, clean_model_name
+from .config import ModelCfg, ImageEncoderCfg, TextDecoderCfg, get_model_config, list_models
 from .cruller import Cruller

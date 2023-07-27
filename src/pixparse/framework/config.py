@@ -4,6 +4,9 @@ from typing import Optional, Tuple
 
 @dataclass
 class OptimizationCfg:
+    """
+    This dataclass serves among others the task.opt arg set.
+    """
     optimizer: str = 'adamw'
     scheduler: str = 'cosine'
     learning_rate: float = 5e-4
@@ -21,6 +24,14 @@ class OptimizationCfg:
 class TaskTrainCfg:
     num_intervals: int = 100
     num_warmup_intervals: int = 5
+    eval_frequency: int = 1000 
     opt: OptimizationCfg = field(default_factory=OptimizationCfg)
     dtype: Optional[str] = None
     amp: bool = True
+
+@dataclass
+class TaskEvalCfg:
+    dtype: Optional[str] = None
+    amp: bool = True
+    model_state_dict: dict = field(default_factory=dict) #FIXME move out state dict into dict of dict
+

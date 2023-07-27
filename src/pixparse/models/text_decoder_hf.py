@@ -31,9 +31,8 @@ def create_text_decoder(cfg: TextDecoderCfg) -> transformers.BartForCausalLM:  #
         model = transformers.AutoModelForCausalLM.from_config(
             config,
         )
-
-    # FIXME not sure if this is needed or what best approach is? Seems a bit of a Donut hack...
-    model.model.decoder.embed_tokens.padding_idx = cfg.pad_token_id
+    # TODO Following is the donut hack. Unused without generate().
+    # model.model.decoder.embed_tokens.padding_idx = cfg.pad_token_id
 
     return model
 
@@ -43,12 +42,13 @@ class TextDecoderHf(nn.Module):
     def __init__(self, cfg: TextDecoderCfg):
         super().__init__()
         self.trunk = create_text_decoder(cfg)
+        self.prepare_inputs_for_generation = self.prepare_inputs_for_inference
 
-    # FIXME cut & paste from Donut, needs updating!!
     def prepare_inputs_for_inference(
             self,
             input_ids: torch.Tensor,
             encoder_outputs: torch.Tensor,
+            pad_token_id: int,
             past_key_values=None,
             past=None,
             use_cache: bool = None,
@@ -65,7 +65,7 @@ class TextDecoderHf(nn.Module):
         # for compatibility with transformers==4.11.x
         if past is not None:
             past_key_values = past
-        attention_mask = input_ids.ne(self.tokenizer.pad_token_id).long()
+        attention_mask = input_ids.ne(pad_token_id).long()
         if past_key_values is not None:
             input_ids = input_ids[:, -1:]
         output = {
@@ -73,7 +73,7 @@ class TextDecoderHf(nn.Module):
             "attention_mask": attention_mask,
             "past_key_values": past_key_values,
             "use_cache": use_cache,
-            "encoder_hidden_states": encoder_outputs.last_hidden_state,
+            "encoder_hidden_states": encoder_outputs #.last_hidden_state, #FIXME for timm ViT encoder there is no last hidden state
         }
         return output
 

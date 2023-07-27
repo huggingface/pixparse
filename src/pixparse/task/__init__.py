@@ -1,1 +1,2 @@
 from .task_cruller_pretrain import TaskCrullerPretrain, TaskCrullerPretrainCfg
+from .task_cruller_eval_ocr import TaskCrullerEvalOCR, TaskCrullerEvalOCRCfg

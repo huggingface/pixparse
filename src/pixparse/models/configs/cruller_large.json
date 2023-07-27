@@ -3,14 +3,15 @@
         "name": "vit_large_patch14_clip_224.datacompxl",
         "image_fmt": "L",
         "image_size": [
-            588,
-            448
+            798,
+            616
         ]
     },
     "text_decoder": {
         "name": "facebook/bart-large",
-        "num_decoder_layers": 6,
+        "num_decoder_layers": 10,
         "max_length": 1024,
         "pad_token_id": null
     }
 }
+

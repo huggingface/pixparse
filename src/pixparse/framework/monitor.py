@@ -5,6 +5,7 @@ from collections import OrderedDict
 from typing import Optional, Tuple, Dict, Union
 
 import torch
+from torch.utils.tensorboard.summary import image
 
 _logger = logging.getLogger(__name__)
 
@@ -103,7 +104,25 @@ class Monitor:
             tensorboard=False,
             tensorboard_dir='tensorboard',
             output_enabled=True,
+            log_eval_data=False,
     ):
+        """
+        A monitoring utility for logging experimental metrics and results to various destinations, such as CSV files,
+        Tensorboard, or Weights & Biases (wandb). Allows logging image data and associated text for OCR generation.
+
+        Args:
+            experiment_name (str, optional): The name of the experiment. Used as the run name in wandb. Defaults to None.
+            output_dir (str, optional): The directory for output files (CSV logs, Tensorboard logs, etc). Defaults to None.
+            logger (Logger, optional): A custom logger instance. Defaults to None.
+            hparams (dict, optional): Hyperparameters for the experiment. Used as the config in wandb. Defaults to an empty dict.
+            wandb (bool, optional): Flag to enable wandb logging. Defaults to False.
+            wandb_project (str, optional): The name of the wandb project. Defaults to 'unknown'.
+            wandb_dir (str, optional): The directory for wandb output. Relative to `output_dir`. Defaults to 'wandb'.
+            tensorboard (bool, optional): Flag to enable Tensorboard logging. Defaults to False.
+            tensorboard_dir (str, optional): The directory for Tensorboard output. Relative to `output_dir`. Defaults to 'tensorboard'.
+            output_enabled (bool, optional): Flag to enable output. If False, disables all output. Defaults to True.
+            log_eval_data (bool, optional): Flag to log evaluation data, can grow quite large in size. Defaults to False.
+        """
         self.output_dir = output_dir  # for tensorboard, csv, text file (TODO) logging
         self.logger = logger or logging.getLogger('log')
         hparams = hparams or {}
@@ -126,18 +145,21 @@ class Monitor:
         self.wandb = None
         if wandb:
             if HAS_WANDB:
+                dir_ = os.path.join(self.output_dir, wandb_dir)
                 self.wandb = wandb.init(
                     project=wandb_project,
                     name=experiment_name,
                     config=hparams,
-                    dir=os.path.join(self.output_dir, wandb_dir)
+                    dir=dir_
                 )
+                _logger.info(f"Wandb found. Metrics are being logged to {dir_}")
             else:
                 _logger.warning(
                     "You've requested to log metrics to wandb but package not found. "
                     "Metrics not being logged to wandb, try `pip install wandb`")
 
         self.output_enabled = output_enabled
+        self.log_eval_data = log_eval_data
 
     def log_step(
             self,
@@ -149,6 +171,8 @@ class Monitor:
             rate: Optional[Union[float, Tuple[float, float]]] = None,
             learning_rate: Optional[float] = None,
             phase_suffix: str = '',
+            metrics: dict = None,
+            eval_data: dict = None,
             **kwargs,
     ):
         """ log train/eval step
@@ -178,6 +202,22 @@ class Monitor:
         self.logger.info(log_str)
 
         if self.tensorboard is not None:
+            if metrics is not None:
+                for metric_category, metric_items in metrics.items():
+                    for metric_name, metric_value in metric_items.items():
+                        self.tensorboard.add_scalar('/'.join([metric_category, metric_name, phase_title]), metric_value, step_idx)
+            if (eval_data is not None) and self.log_eval_data:
+                for eval_data_category, eval_data_triplet in eval_data.items():
+                    if eval_data_category == 'ocr_reconstruction_data':
+                        # Add an image, its text, and its reconstructed text, revert of https://github.com/huggingface/open-muse/blob/d30d864b2f17fd0b152037e10b73aeb2b1941e20/training/train_muse.py#L757
+                        image_tag = '/'.join([eval_data_category, 'image', phase_title])
+                        # Hack to avoid caffe2 import errors in tensorboard
+                        # This avoids checking for image names
+                        self.tensorboard._get_file_writer().add_summary(image(image_tag, eval_data_triplet['image'], dataformats="CHW"), step_idx)
+                        self.tensorboard.add_text('/'.join([eval_data_category, 'original_text', phase_title]), eval_data_triplet['original_text'], step_idx)
+                        self.tensorboard.add_text('/'.join([eval_data_category, 'reconstructed_text', phase_title]), eval_data_triplet['reconstructed_text'], step_idx)
+
+
             if loss is not None:
                 self.tensorboard.add_scalar('/'.join(['Loss', phase_title]), loss, step_idx)
             if learning_rate is not None:
@@ -191,7 +231,6 @@ class Monitor:
                 wandb_log['loss'] = loss
             if learning_rate:
                 wandb_log['learning_rate'] = learning_rate
-            self.wandb.log({phase_title: wandb_log}, step=step_idx)
 
     def log_phase(
             self,

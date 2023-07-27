@@ -11,9 +11,10 @@ import torch
 
 from pixparse.data import DataCfg, create_loader
 from pixparse.framework import DeviceEnv, Monitor, train_one_interval, evaluate, setup_logging, random_seed
-from pixparse.models import clean_model_name
+from pixparse.utils.name_utils import clean_name
 from pixparse.task import TaskCrullerPretrain, TaskCrullerPretrainCfg
 
+from chug.webdataset import create_doc_anno_pipe
 _logger = logging.getLogger('train')
 
 
@@ -32,6 +33,7 @@ class TrainCfg:
     wandb_project: str = 'unknown'
 
     tensorboard: bool = False
+    log_eval_data: bool = False
 
 
 def train(
@@ -48,18 +50,12 @@ def train(
             loaders['train'],
         )
 
-        if 'eval' in loaders:
-            metrics = evaluate(
-                task,
-                loaders['eval']
-            )
-        else:
-            metrics = {}
-
         # save checkpoint
         # checkpointer.save(task, metrics, interval)
         if device_env.is_primary():
-            torch.save(task.state_dict(), os.path.join(cfg.checkpoint_dir, f'checkpoint-{i}.pt'))
+            checkpoint_dir =  os.path.join(cfg.checkpoint_dir, cfg.experiment)
+            os.makedirs(checkpoint_dir, exist_ok=True)
+            torch.save(task.state_dict(), os.path.join(checkpoint_dir, f'checkpoint-{i}.pt'))
 
 
 parser = ArgumentParser(
@@ -84,7 +80,7 @@ def main():
 
     # get the name of the experiments
     if train_cfg.experiment is None:
-        model_name_safe = clean_model_name(task_cfg.model_name)
+        model_name_safe = clean_name(task_cfg.model_name)
         date_str = datetime.now().strftime("%Y%m%d-%H%M%S")
         if device_env.world_size > 1:
             # sync date_str from master to all ranks
@@ -134,22 +130,17 @@ def main():
     )
 
     loaders = {}
-    loaders['train'] = create_loader(
+    assert (data_cfg.train is not None) or (data_cfg.eval is not None), f"Neither data_cfg.train nor data_cfg.eval are set."
+    if data_cfg.train is not None:
+        loaders['train'] = create_loader(
         data_cfg.train,
         is_train=True,
         image_preprocess=task.image_preprocess_train,
         anno_preprocess=task.anno_preprocess_train,
         image_fmt=task_cfg.model.image_encoder.image_fmt,
         world_size=device_env.world_size,
+        create_decoder_pipe=create_doc_anno_pipe,
     )
-    if data_cfg.eval is not None:
-        loaders['eval'] = create_loader(
-            data_cfg.eval,
-            is_train=False,
-            image_preprocess=task.image_preprocess_eval,
-            anno_preprocess=task.anno_preprocess_eval,
-            #world_size=device_env.world_size
-        )
 
     task.train_setup(
         num_batches_per_interval=loaders['train'].num_batches,
