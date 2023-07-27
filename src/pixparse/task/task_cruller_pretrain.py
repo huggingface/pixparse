@@ -350,10 +350,11 @@ class TaskCrullerPretrain(TaskTrain):
             device_env=self.device_env,
             max_recursion_length=self.max_recursion_length
             )
-        
-        metrics['ocr_reconstruction'] = ocr_metrics
-
-        eval_data['ocr_reconstruction_data'] = ocr_reconstructed_sample
+        if ocr_metrics and ocr_reconstructed_sample:
+            metrics['ocr_reconstruction'] = ocr_metrics
+            eval_data['ocr_reconstruction_data'] = ocr_reconstructed_sample
+        else:
+            _logger.info("Can't generate text from current batch. Skipping metrics...")
         
         # TODO Add other metrics relevant for eval step
         # 
