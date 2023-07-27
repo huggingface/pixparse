@@ -72,16 +72,19 @@ def get_ocr_metrics(
         ]
 
         # FIXME sometimes we are decoding no text at all after cleaning
-        decoded_texts, ocr_predictions = zip(
-            *[
-                (ref, pred)
-                for ref, pred in zip(decoded_texts, ocr_predictions)
-                if (ref and pred)
-            ]
-        )
+        filtered = [
+            (ref, pred)
+            for ref, pred in zip(decoded_texts, ocr_predictions)
+            if ref and pred
+        ]
 
-        if not decoded_texts or not ocr_predictions:
+        if not filtered:
             return None, None
+
+        decoded_texts, ocr_predictions = zip(*filtered)
+
+        decoded_texts = list(decoded_texts)
+        ocr_predictions = list(ocr_predictions)
 
         ocr_predictions = [
             text[0 : len(reftext)]
