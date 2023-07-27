@@ -5,12 +5,13 @@ from jiwer import cer, wer
 import jiwer.transforms as tr
 
 import re
-from typing import List
+from typing import List, Tuple, Optional
 import csv
+
 
 def get_ocr_metrics(
     model, tokenizer, image_input, text_input, device_env, max_recursion_length
-):
+) -> Optional[Tuple[dict, dict]]:
     """
     Calculate OCR metrics.
 
@@ -21,7 +22,7 @@ def get_ocr_metrics(
         text_input: Expected output text.
 
     Returns:
-        A dictionary of OCR metrics, and a dictionary containing a single reconstructed sample.
+        A tuple of two dictionaries containing OCR metrics and a reconstructed sample, or None if all decoded texts or OCR predictions are empty.
     """
     cer_transforms = tr.Compose(
         [
@@ -70,7 +71,22 @@ def get_ocr_metrics(
             re.sub(r"<.*?>", "", re.sub("\n", " ", text)) for text in decoded_texts
         ]
 
-        ocr_predictions = [text[0:len(reftext)] for text, reftext in zip(ocr_predictions, decoded_texts)]
+        # FIXME sometimes we are decoding no text at all after cleaning
+        decoded_texts, ocr_predictions = zip(
+            *[
+                (ref, pred)
+                for ref, pred in zip(decoded_texts, ocr_predictions)
+                if (ref and pred)
+            ]
+        )
+
+        if not decoded_texts or not ocr_predictions:
+            return None, None
+
+        ocr_predictions = [
+            text[0 : len(reftext)]
+            for text, reftext in zip(ocr_predictions, decoded_texts)
+        ]
 
         ocr_pretraining_metrics = get_cer_wer_metrics(
             cer_transforms,
