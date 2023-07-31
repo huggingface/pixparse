@@ -40,10 +40,11 @@ python -m pixparse.app.train \
 
 ```
 
-To launch evaluation on existing checkpoints, you need to use a Cruller Eval Task, e.g. on FUNSD dataset:
+To launch evaluation on existing checkpoints, you need to use a Cruller Eval Task, e.g. on FUNSD dataset. The task-name argument will select which task is to be run. donut_eval_ocr, for instance, runs Donut OCR on the dataset chosen and does not need external checkpoints.
 
 ```bash
 python -m pixparse.app.eval \
+  --eval.task-name cruller_eval_ocr \
   --data.eval.source "pipe:aws s3 cp s3://.../FUNSD/FUNSD-000000.tar -" \
   --data.eval.num-samples 200 \
   --data.eval.batch-size 16 \
