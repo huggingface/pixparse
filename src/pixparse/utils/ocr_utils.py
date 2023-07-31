@@ -109,10 +109,10 @@ def get_ocr_metrics(
 def get_cer_wer_metrics(
     cer_transforms,
     wer_transforms,
-    ocr_pretraining_metrics,
+    ocr_pretraining_metrics: dict,
     ocr_predictions,
     decoded_texts,
-):
+) -> dict:
     wer_output = wer(
         reference=decoded_texts,
         hypothesis=ocr_predictions,

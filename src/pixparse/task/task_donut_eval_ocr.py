@@ -3,21 +3,26 @@ import re
 from transformers import DonutProcessor, VisionEncoderDecoderModel
 import torch
 from dataclasses import dataclass
+from functools import partial
+
 
 from pixparse.framework import TaskEvalCfg, TaskEval, DeviceEnv, Monitor
 from pixparse.models import Cruller, ModelCfg, get_model_config
-from pixparse.tokenizers import TokenizerHF, TokenizerCfg
 from pixparse.data import preprocess_text_anno
 from pixparse.utils import get_ocr_metrics
+from pixparse.utils.ocr_utils import get_cer_wer_metrics
+
+import jiwer.transforms as tr
+
+import torch
+import torchvision.transforms as transforms
+
+import numpy as np
 
 @dataclass
 class TaskDonutEvalOCRCfg(TaskEvalCfg):
     def __post_init__(self):
-        self.processor = DonutProcessor.from_pretrained("naver-clova-ix/donut-base-finetuned-cord-v2")
-        self.model = VisionEncoderDecoderModel.from_pretrained("naver-clova-ix/donut-base-finetuned-cord-v2")
-        self.task_prompt = "<s_cord-v2>"
-        self.decoder_input_ids = self.processor.tokenizer(self.task_prompt, add_special_tokens=False, return_tensors="pt").input_ids
-
+        pass
 
 class TaskDonutEvalOCR(TaskEval):
     """Simple task to evaluate donut on FUNSD data and get metrics in similar format as Cruller.
@@ -36,6 +41,50 @@ class TaskDonutEvalOCR(TaskEval):
             monitor=monitor,
         )
         self.cfg = cfg
+        self.processor = DonutProcessor.from_pretrained("naver-clova-ix/donut-base-finetuned-cord-v2")
+        self.model = VisionEncoderDecoderModel.from_pretrained("naver-clova-ix/donut-base-finetuned-cord-v2")
+        self.task_prompt = "<s_cord-v2>"
+        self.decoder_input_ids = self.processor.tokenizer(self.task_prompt, add_special_tokens=False, return_tensors="pt").input_ids
+
+        self.vocab_size = len(self.processor.tokenizer)
+
+        preproc_fn = preprocess_text_anno
+        self.max_position_embeddings = 512
+        self.anno_preprocess_eval = partial(
+            preproc_fn,
+            tokenizer=self.processor.tokenizer,
+            max_position_embeddings=self.max_position_embeddings,
+            task_start_token="",
+            prompt_end_token=self.task_prompt,
+        )
+
+        self.model.eval()
+
+        self.has_no_sync = False
+        self.num_image_chs = 3 # 3
+
+        # preprocessors cross both the task/model & dataset domain,
+        # created within task here and passed to data loaders
+        self.image_preprocess_eval = lambda x: x 
+        self.cer_transforms = tr.Compose(
+        [
+            tr.RemoveSpecificWords("<pad>"),
+            tr.Strip(),
+            tr.ReduceToListOfListOfChars(),
+        ]
+    )
+
+        self.wer_transforms = tr.Compose(
+        [
+            tr.RemoveSpecificWords("<pad>"),
+            tr.RemoveMultipleSpaces(),
+            tr.Strip(),
+            tr.ReduceToListOfListOfWords(),
+        ]
+    )
+        self.eval_metrics = {}
+        self.max_recursion_length = 1000  # specific to Cruller for generation
+
     
     def setup(self):
         device = self.device_env.device
@@ -67,20 +116,22 @@ class TaskDonutEvalOCR(TaskEval):
         text_target = torch.stack(text_target, dim=0).to(
             self.device_env.device, non_blocking=True
         )
-        image_input = image_input.to(self.device_env.device, non_blocking=True)
+        #image_input = image_input.to(self.device_env.device, non_blocking=True)
 
 
         # Compute OCR metrics for Donut
 
 
-        decoder_input_ids = self.processor.tokenizer([self.task_prompt] * self.cfg.batch_size, add_special_tokens=False, return_tensors="pt").input_ids
+        decoder_input_ids = self.processor.tokenizer([self.task_prompt] * len(sample), add_special_tokens=False, return_tensors="pt").input_ids
+
+        image_input = [Image.fromarray(np.stack((np.array(image),)*3, axis=-1)) for image in image_input if len(np.array(image).shape) == 2]
 
         pixel_values = self.processor(image_input, return_tensors="pt").pixel_values
         with torch.inference_mode():
             outputs = self.model.generate(
-                pixel_values.to(self.device),
-                decoder_input_ids=decoder_input_ids.to(self.device),
-                max_length=self.model.decoder.config.max_position_embeddings,
+                pixel_values.to(self.device_env.device),
+                decoder_input_ids=decoder_input_ids.to(self.device_env.device),
+                max_length=self.max_position_embeddings,
                 early_stopping=True,
                 pad_token_id=self.processor.tokenizer.pad_token_id,
                 eos_token_id=self.processor.tokenizer.eos_token_id,
@@ -90,13 +141,17 @@ class TaskDonutEvalOCR(TaskEval):
                 return_dict_in_generate=True,
             )
 
-        sequence = self.processor.batch_decode(outputs.sequences)[0] #FIXME only first sentence taken
-        sequence = sequence.replace(self.processor.tokenizer.eos_token, "").replace(self.processor.tokenizer.pad_token, "")
-        generated_text = re.sub(r"<.*?>", "", sequence, count=1).strip() # FIXME not passed along
-
-        decoded_texts = self.tokenizer.trunk.batch_decode(text_input)
+        sequence = self.processor.batch_decode(outputs.sequences)
+        sequence = [element.replace(self.processor.tokenizer.eos_token, "").replace(self.processor.tokenizer.pad_token, "") for element in sequence]
+        generated_text = [re.sub(r"<.*?>", "", element, count=1).strip() for element in sequence]# FIXME not passed along
+        text_input[
+            text_input == -100
+        ] = (
+            self.processor.tokenizer.pad_token_id
+        ) 
+        decoded_texts = self.processor.tokenizer.batch_decode(text_input)
         ocr_predictions = [
-            re.sub(r"<.*?>", "", re.sub("\n", " ", text)) for text in ocr_predictions
+            re.sub(r"<.*?>", "", re.sub("\n", " ", text)) for text in generated_text
         ]
         decoded_texts = [
             re.sub(r"<.*?>", "", re.sub("\n", " ", text)) for text in decoded_texts
@@ -122,20 +177,13 @@ class TaskDonutEvalOCR(TaskEval):
             for text, reftext in zip(ocr_predictions, decoded_texts)
         ]
 
-        ocr_pretraining_metrics = get_cer_wer_metrics(
-            cer_transforms,
-            wer_transforms,
-            ocr_pretraining_metrics,
+        metrics["ocr_reconstruction"] = get_cer_wer_metrics(
+            self.cer_transforms,
+            self.wer_transforms,
+            dict(),
             ocr_predictions,
             decoded_texts,
         )
-        reconstructed_sample = {
-            "image": image_input[0],
-            "original_text": decoded_texts[0],
-            "reconstructed_text": ocr_predictions[0],
-        }
-        metrics["ocr_reconstruction"] = ocr_metrics
-
         # TODO Add other metrics relevant for eval step
         #
         # metrics['metric_category'] = ...
