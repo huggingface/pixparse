@@ -34,26 +34,31 @@ _logger = logging.getLogger("eval")
 
 
 class TaskFactory:
-    @staticmethod
-    def create_task(
-        task_name: str, task_cfg: TaskEvalCfg, device_env: DeviceEnv, monitor: Monitor
-    ):
-        if task_name.lower() == "cruller":
-            if isinstance(task_cfg, TaskCrullerEvalOCRCfg):
-                return TaskCrullerEvalOCR(task_cfg, device_env, monitor)
-            else:
-                raise ValueError(
-                    f"Incorrect config type: {type(task_cfg).__name__} for task: {task_name}"
-                )
-        elif task_name.lower() == "donut":
-            if isinstance(task_cfg, TaskDonutEvalOCRCfg):
-                return TaskDonutEvalOCR(task_cfg, device_env, monitor)
-            else:
-                raise ValueError(
-                    f"Incorrect config type: {type(task_cfg).__name__} for task: {task_name}"
-                )
-        else:
-            raise ValueError(f"Unknown task type: {task_name}")
+    TASK_CONFIG_REGISTRY = {
+        'cruller_eval_ocr': TaskCrullerEvalOCRCfg,
+        'donut_eval_ocr': TaskDonutEvalOCRCfg
+    }
+
+    TASK_CLASS_REGISTRY = {
+        'cruller_eval_ocr': TaskCrullerEvalOCR,
+        'donut_eval_ocr': TaskDonutEvalOCR
+    }
+
+    @classmethod
+    def create_task_cfg(cls, task_name: str, args):
+        task_name = task_name.lower()
+        if task_name not in cls.TASK_CONFIG_REGISTRY:
+            raise ValueError(f"Unknown task type: {task_name}. Available tasks are {list(cls.TASK_CONFIG_REGISTRY.keys())}")
+        task_cfg_cls = cls.TASK_CONFIG_REGISTRY[task_name]
+        return task_cfg_cls(**vars(args))
+
+    @classmethod
+    def create_task(cls, task_name: str, task_cfg: TaskEvalCfg, device_env: DeviceEnv, monitor: Monitor):
+        task_name = task_name.lower()
+        if task_name not in cls.TASK_CLASS_REGISTRY:
+            raise ValueError(f"Unknown task type: {task_name}. Available eval tasks are {list(cls.TASK_CLASS_REGISTRY.keys())}")
+        task_cls = cls.TASK_CLASS_REGISTRY[task_name]
+        return task_cls(task_cfg, device_env, monitor)
 
 
 @dataclass
@@ -101,10 +106,11 @@ parser.add_arguments(DataCfg, dest="data")
 def main():
     args = parser.parse_args()
     eval_cfg: EvalCfg = args.eval
-    task_cfg: TaskEvalCfg = args.task
     data_cfg: DataCfg = args.data
 
-    # Define task
+    # create task config
+
+    task_cfg = TaskFactory.create_task_cfg(eval_cfg.task_name, args.task) 
 
     device_env = DeviceEnv()
     random_seed(
