@@ -1,7 +1,6 @@
 from PIL import Image
 import re
 from transformers import DonutProcessor, VisionEncoderDecoderModel
-from datasets import load_dataset
 import torch
 from dataclasses import dataclass
 
