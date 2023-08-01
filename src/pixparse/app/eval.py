@@ -157,7 +157,7 @@ def main():
 
         # Create safe metrics file path
 
-        checkpoint_name = eval_cfg.checkpoint_path.replace("/", "-").replace(".pt", "")
+        checkpoint_name = eval_cfg.checkpoint_path.replace("/", "_").replace(".pt", "")
         metrics_file_name = f"{checkpoint_name}-{eval_cfg.dataset_name}-metrics.json"
 
         # bypass DDP module
