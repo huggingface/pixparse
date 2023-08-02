@@ -116,6 +116,21 @@ class TaskCrullerEvalOCR(TaskEval):
         self.has_no_sync = False
         self.num_image_chs = 1 if cfg.model.image_encoder.image_fmt == "L" else 3
 
+        # TODO refactor, used in many tasks
+        img_mean = self.model.image_encoder.trunk.pretrained_cfg["mean"]
+        img_std = self.model.image_encoder.trunk.pretrained_cfg["std"]
+
+        self.img_mean = (
+            sum(img_mean) / len(img_mean)
+            if cfg.model.image_encoder.image_fmt == "L"
+            else img_mean
+        )
+        self.img_std = (
+            sum(img_std) / len(img_std)
+            if cfg.model.image_encoder.image_fmt == "L"
+            else img_std
+        )
+
         # preprocessors cross both the task/model & dataset domain,
         # created within task here and passed to data loaders
         self.image_preprocess_eval = transforms.Compose(
@@ -128,9 +143,8 @@ class TaskCrullerEvalOCR(TaskEval):
                 ),
                 # transforms.CenterCrop(448),  # FIXME need better aspect preserving resize & pad
                 transforms.Normalize(
-                    # FIXME get mean / std from pretrained img model, fallback to 0.5 in random init
-                    mean=(0.5,) * self.num_image_chs,
-                    std=(0.5,) * self.num_image_chs,
+                    mean=self.img_mean,
+                    std=self.img_std,
                 ),
             ]
         )
@@ -145,15 +159,19 @@ class TaskCrullerEvalOCR(TaskEval):
         """
         Method decorator to log execution time
         """
+
         def wrapper(self, *args, **kwargs):
             start_time = time.time()
             result = func(self, *args, **kwargs)
             end_time = time.time()
             execution_time = end_time - start_time
-            _logger.info(f"Executed method {func.__name__} in {execution_time:.2f} seconds")
+            _logger.info(
+                f"Executed method {func.__name__} in {execution_time:.2f} seconds"
+            )
             return result
+
         return wrapper
-    
+
     def setup(self):
         device = self.device_env.device
         self.model.to(device)
@@ -219,7 +237,7 @@ class TaskCrullerEvalOCR(TaskEval):
         return {"ocr_reconstruction": {"wer": average_wer, "cer": average_cer}}
 
     def end(self):
-        # process metrics, average them out? now done in self.average_metrics, called in evaluate, maybe end() should be called in evaluate 
+        # process metrics, average them out? now done in self.average_metrics, called in evaluate, maybe end() should be called in evaluate
         # TODO do that, call average_metrics in end
         pass
 

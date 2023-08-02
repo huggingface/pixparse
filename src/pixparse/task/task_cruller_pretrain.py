@@ -118,6 +118,14 @@ class TaskCrullerPretrain(TaskTrain):
         self.loss = nn.CrossEntropyLoss(ignore_index=-100)
         self.has_no_sync = False
         self.num_image_chs = 1 if cfg.model.image_encoder.image_fmt == 'L' else 3
+        
+        # TODO refactor, used in many tasks
+
+        img_mean = self.model.image_encoder.trunk.pretrained_cfg['mean']
+        img_std = self.model.image_encoder.trunk.pretrained_cfg['std']
+        
+        self.img_mean = sum(img_mean) / len(img_mean) if cfg.model.image_encoder.image_fmt == 'L' else img_mean
+        self.img_std = sum(img_std) / len(img_std) if cfg.model.image_encoder.image_fmt == 'L' else img_std
 
         # preprocessors cross both the task/model & dataset domain,
         # created within task here and passed to data loaders
@@ -129,9 +137,8 @@ class TaskCrullerPretrain(TaskTrain):
                 antialias=True),
             #transforms.CenterCrop(448),  # FIXME need better aspect preserving resize & pad
             transforms.Normalize(
-                # FIXME get mean / std from pretrained img model, fallback to 0.5 in random init
-                mean=(0.5,) * self.num_image_chs,
-                std=(0.5,) * self.num_image_chs,
+                mean=self.img_mean,
+                std=self.img_std,
             )
         ])
         self.image_preprocess_eval = None
