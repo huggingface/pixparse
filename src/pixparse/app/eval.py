@@ -136,7 +136,7 @@ def main():
     
     # Check if current tasks is external model evaluation
 
-    if eval_cfg.task_name not in ["donut"]:
+    if eval_cfg.task_name not in ["donut_eval_ocr"]:
         checkpoint_path = eval_cfg.checkpoint_path
         eval_cfg = replace(eval_cfg, checkpoint_path=checkpoint_path)
 

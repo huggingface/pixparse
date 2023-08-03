@@ -49,7 +49,7 @@ class TaskDonutEvalOCR(TaskEval):
         self.vocab_size = len(self.processor.tokenizer)
 
         preproc_fn = preprocess_text_anno
-        self.max_position_embeddings = 512
+        self.max_position_embeddings = 768
         self.anno_preprocess_eval = partial(
             preproc_fn,
             tokenizer=self.processor.tokenizer,
@@ -102,6 +102,11 @@ class TaskDonutEvalOCR(TaskEval):
         return loaders
         # return loaders_and_tasks
 
+    def clean_text(self, text: str) -> str:
+        sequence = text.replace(self.processor.tokenizer.eos_token, "").replace(self.processor.tokenizer.pad_token, "")
+        cleaned_text = re.sub('<.*?>', '', sequence)
+        return cleaned_text
+    
     def step(self, sample):
         """
         Does one step of evaluation for OCR.
@@ -116,20 +121,16 @@ class TaskDonutEvalOCR(TaskEval):
         text_target = torch.stack(text_target, dim=0).to(
             self.device_env.device, non_blocking=True
         )
-        #image_input = image_input.to(self.device_env.device, non_blocking=True)
-
 
         # Compute OCR metrics for Donut
 
+        decoder_input_ids = self.processor.tokenizer(self.task_prompt, add_special_tokens=False, return_tensors="pt").input_ids
 
-        decoder_input_ids = self.processor.tokenizer([self.task_prompt] * len(sample), add_special_tokens=False, return_tensors="pt").input_ids
+        pixel_values = self.processor([im.convert('RGB') for im in image_input], return_tensors="pt").pixel_values
 
-        image_input = [Image.fromarray(np.stack((np.array(image),)*3, axis=-1)) for image in image_input if len(np.array(image).shape) == 2]
-
-        pixel_values = self.processor(image_input, return_tensors="pt").pixel_values
         with torch.inference_mode():
-            outputs = self.model.generate(
-                pixel_values.to(self.device_env.device),
+            outputs = [self.model.generate(
+                pixel_value.unsqueeze(0).to(self.device_env.device),
                 decoder_input_ids=decoder_input_ids.to(self.device_env.device),
                 max_length=self.max_position_embeddings,
                 early_stopping=True,
@@ -139,28 +140,19 @@ class TaskDonutEvalOCR(TaskEval):
                 num_beams=1,
                 bad_words_ids=[[self.processor.tokenizer.unk_token_id]],
                 return_dict_in_generate=True,
-            )
-
-        sequence = self.processor.batch_decode(outputs.sequences)
-        sequence = [element.replace(self.processor.tokenizer.eos_token, "").replace(self.processor.tokenizer.pad_token, "") for element in sequence]
-        generated_text = [re.sub(r"<.*?>", "", element, count=1).strip() for element in sequence]# FIXME not passed along
+            ) for pixel_value in pixel_values]
+        generated_text = [self.clean_text(self.processor.decode(greedy_outputs.sequences[0])) for greedy_outputs in outputs]
         text_input[
             text_input == -100
         ] = (
             self.processor.tokenizer.pad_token_id
         ) 
-        decoded_texts = self.processor.tokenizer.batch_decode(text_input)
-        ocr_predictions = [
-            re.sub(r"<.*?>", "", re.sub("\n", " ", text)) for text in generated_text
-        ]
-        decoded_texts = [
-            re.sub(r"<.*?>", "", re.sub("\n", " ", text)) for text in decoded_texts
-        ]
-
+        raw_decoded_texts = self.processor.tokenizer.batch_decode(text_input)
+        decoded_texts = [self.clean_text(t) for t in raw_decoded_texts]
         # FIXME sometimes we are decoding no text at all after cleaning
         filtered = [
             (ref, pred)
-            for ref, pred in zip(decoded_texts, ocr_predictions)
+            for ref, pred in zip(decoded_texts, generated_text)
             if ref and pred
         ]
 
