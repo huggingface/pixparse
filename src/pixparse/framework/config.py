@@ -33,5 +33,6 @@ class TaskTrainCfg:
 class TaskEvalCfg:
     dtype: Optional[str] = None
     amp: bool = True
+    model_name: str = ""
     model_state_dict: dict = field(default_factory=dict) #FIXME move out state dict into dict of dict
 
