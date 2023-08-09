@@ -10,9 +10,9 @@ from simple_parsing import ArgumentParser
 import torch
 
 from pixparse.data import DataCfg, create_loader
-from pixparse.framework import DeviceEnv, Monitor, train_one_interval, evaluate, setup_logging, random_seed
+from pixparse.framework import DeviceEnv, Monitor, train_one_interval, evaluate, setup_logging, random_seed, TaskTrain, TaskTrainCfg
 from pixparse.utils.name_utils import clean_name
-from pixparse.task import TaskCrullerPretrain, TaskCrullerPretrainCfg
+from pixparse.task import TaskFactory
 
 from chug.webdataset import create_doc_anno_pipe
 _logger = logging.getLogger('train')
@@ -28,6 +28,7 @@ class TrainCfg:
 
     # TODO
     # resume -- resume experiment from location, mode, etc
+    task_name: str = "cruller_pretrain"
 
     wandb: bool = False
     wandb_project: str = 'unknown'
@@ -38,7 +39,7 @@ class TrainCfg:
 
 def train(
         cfg: TrainCfg,
-        task: TaskCrullerPretrain,  # FIXME define common functionality in interface
+        task: TaskTrain,
         loaders,
 ):
     device_env = task.device_env
@@ -64,17 +65,20 @@ parser = ArgumentParser(
     add_config_path_arg=True,
 )
 parser.add_arguments(TrainCfg, dest='train')
-parser.add_arguments(TaskCrullerPretrainCfg, dest='task')
+parser.add_arguments(TaskTrainCfg, dest='task')
 parser.add_arguments(DataCfg, dest='data')
 
 
 def main():
     args = parser.parse_args()
     train_cfg: TrainCfg = args.train
-    task_cfg: TaskCrullerPretrainCfg = args.task
     data_cfg: DataCfg = args.data
 
+    # Create task config 
+
+    task_cfg = TaskFactory.create_task_cfg(train_cfg.task_name, args.task) 
     device_env = DeviceEnv()
+
     random_seed(train_cfg.seed, rank=device_env.global_rank)
     print(device_env)
 
@@ -123,11 +127,7 @@ def main():
         _logger.info(task_cfg)
         _logger.info(train_cfg)
 
-    task = TaskCrullerPretrain(
-        task_cfg,
-        device_env,
-        monitor,
-    )
+    task = TaskFactory.create_task(train_cfg.task_name, task_cfg, device_env, monitor)
 
     loaders = {}
     assert (data_cfg.train is not None) or (data_cfg.eval is not None), f"Neither data_cfg.train nor data_cfg.eval are set."
