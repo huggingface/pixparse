@@ -28,6 +28,7 @@ class TaskTrainCfg:
     opt: OptimizationCfg = field(default_factory=OptimizationCfg)
     dtype: Optional[str] = None
     amp: bool = True
+    model_name: str = ""
 
 @dataclass
 class TaskEvalCfg:
