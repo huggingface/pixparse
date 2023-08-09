@@ -13,10 +13,11 @@ The training objectives and pretraining datasets will also be inspired by the as
 
 ## Usage
 
-To launch a training Cruller Task on IDL data, you would need these arguments in these scopes.
+To launch a pretraining Cruller Task on IDL data, you would need these arguments in these scopes. The task-name argument selects which task is to be run, in this case cruller_pretrain. 
 
 ```bash
 python -m pixparse.app.train \
+  --task-name cruller_pretrain \
   --data.train.source "pipe:aws s3 cp s3://url-to-IDL-webdataset-shards/idl_shard-00{000..699}.tar -" \
   --data.train.batch-size 8 \
   --data.train.num-samples 800000 \
@@ -40,7 +41,7 @@ python -m pixparse.app.train \
 
 ```
 
-To launch evaluation on existing checkpoints, you need to use a Cruller Eval Task, e.g. on FUNSD dataset. The task-name argument will select which task is to be run. donut_eval_ocr, for instance, runs Donut OCR on the dataset chosen and does not need external checkpoints.
+To launch evaluation on existing checkpoints, you need to use a Cruller Eval Task, e.g. on FUNSD dataset. The task-name argument will select which task is to be run. donut_eval_ocr, for instance, runs Donut as an OCR engine on the dataset chosen and does not need external checkpoints.
 
 ```bash
 python -m pixparse.app.eval \
