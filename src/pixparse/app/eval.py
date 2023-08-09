@@ -21,44 +21,11 @@ from pixparse.framework import (
 )
 from pixparse.utils.s3_utils import load_checkpoint_from_s3
 
-from pixparse.task import (
-    TaskCrullerEvalOCR,
-    TaskCrullerEvalOCRCfg,
-    TaskDonutEvalOCR,
-    TaskDonutEvalOCRCfg,
-)
+from pixparse.task.task_factory import TaskFactory
 
 from chug.webdataset import create_doc_anno_pipe, create_image_text_pipe
 
 _logger = logging.getLogger("eval")
-
-
-class TaskFactory:
-    TASK_CONFIG_REGISTRY = {
-        'cruller_eval_ocr': TaskCrullerEvalOCRCfg,
-        'donut_eval_ocr': TaskDonutEvalOCRCfg
-    }
-
-    TASK_CLASS_REGISTRY = {
-        'cruller_eval_ocr': TaskCrullerEvalOCR,
-        'donut_eval_ocr': TaskDonutEvalOCR
-    }
-
-    @classmethod
-    def create_task_cfg(cls, task_name: str, args):
-        task_name = task_name.lower()
-        if task_name not in cls.TASK_CONFIG_REGISTRY:
-            raise ValueError(f"Unknown task type: {task_name}. Available tasks are {list(cls.TASK_CONFIG_REGISTRY.keys())}")
-        task_cfg_cls = cls.TASK_CONFIG_REGISTRY[task_name]
-        return task_cfg_cls(**vars(args))
-
-    @classmethod
-    def create_task(cls, task_name: str, task_cfg: TaskEvalCfg, device_env: DeviceEnv, monitor: Monitor):
-        task_name = task_name.lower()
-        if task_name not in cls.TASK_CLASS_REGISTRY:
-            raise ValueError(f"Unknown task type: {task_name}. Available eval tasks are {list(cls.TASK_CLASS_REGISTRY.keys())}")
-        task_cls = cls.TASK_CLASS_REGISTRY[task_name]
-        return task_cls(task_cfg, device_env, monitor)
 
 
 @dataclass
