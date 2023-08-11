@@ -102,6 +102,8 @@ def main():
     )
     
     # Check if current tasks is external model evaluation
+    
+    # FIXME defer load checkpoint to task?
 
     if eval_cfg.task_name not in ["donut_eval_ocr"]:
         checkpoint_path = eval_cfg.checkpoint_path
@@ -119,7 +121,7 @@ def main():
             ), f"Cannot find checkpoint {checkpoint_path}: File not found"
 
             checkpoint = torch.load(eval_cfg.checkpoint_path)
-            state_dict = checkpoint["model"]
+        state_dict = checkpoint["model"]
 
 
         # Create safe metrics file path

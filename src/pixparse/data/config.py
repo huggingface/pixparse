@@ -11,6 +11,7 @@ class PreprocessCfg:  # text and vision preproc cfg separate? flattened into dat
 @dataclass
 class DatasetCfg:
     source: str
+    format: str
     num_samples: int
     batch_size: int
     num_workers: int = 4

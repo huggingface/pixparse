@@ -12,6 +12,7 @@ import torch
 from pixparse.data import DataCfg, create_loader
 from pixparse.framework import DeviceEnv, Monitor, train_one_interval, evaluate, setup_logging, random_seed, TaskTrain, TaskTrainCfg
 from pixparse.utils.name_utils import clean_name
+from pixparse.utils.s3_utils import load_checkpoint_from_s3
 from pixparse.task import TaskFactory
 
 from chug.webdataset import create_doc_anno_pipe
@@ -23,7 +24,9 @@ class TrainCfg:
     experiment: Optional[str] = None  # experiment name, auto-generated if None or required?
     output_dir: str = './output'
     log_filename: str = 'out.log'
-    checkpoint_dir: Optional[str] = None  # default output_dir/checkpoints
+    s3_bucket: str = ""
+    checkpoint_path: str = ""
+    output_checkpoint_dir: Optional[str] = None  # default output_dir/checkpoints
     seed: int = 42
 
     # TODO
@@ -54,7 +57,7 @@ def train(
         # save checkpoint
         # checkpointer.save(task, metrics, interval)
         if device_env.is_primary():
-            checkpoint_dir =  os.path.join(cfg.checkpoint_dir, cfg.experiment)
+            checkpoint_dir =  os.path.join(cfg.output_checkpoint_dir, cfg.experiment)
             os.makedirs(checkpoint_dir, exist_ok=True)
             torch.save(task.state_dict(), os.path.join(checkpoint_dir, f'checkpoint-{i}.pt'))
 
@@ -120,7 +123,25 @@ def main():
         output_enabled=device_env.is_primary(),
     )
 
-    checkpoint_dir = train_cfg.checkpoint_dir or os.path.join(experiment_path, 'checkpoints')
+    checkpoint_path = train_cfg.checkpoint_path
+    train_cfg = replace(train_cfg, checkpoint_path=checkpoint_path)
+
+    # FIXME check if path is local or s3?
+    if train_cfg.s3_bucket != "":
+        _logger.info("s3 bucket specified. Loading checkpoint from s3.")
+        checkpoint = load_checkpoint_from_s3(
+            train_cfg.s3_bucket, train_cfg.checkpoint_path
+        )
+    else:
+        assert os.path.isfile(
+            checkpoint_path
+        ), f"Cannot find checkpoint {checkpoint_path}: File not found"
+
+        checkpoint = torch.load(train_cfg.checkpoint_path)
+        state_dict = checkpoint["model"]
+
+
+    checkpoint_dir = train_cfg.output_checkpoint_dir or os.path.join(experiment_path, 'checkpoints')
     os.makedirs(checkpoint_dir, exist_ok=True)
     train_cfg = replace(train_cfg, checkpoint_dir=checkpoint_dir)
     if device_env.is_primary():
@@ -138,8 +159,9 @@ def main():
         image_preprocess=task.image_preprocess_train,
         anno_preprocess=task.anno_preprocess_train,
         image_fmt=task_cfg.model.image_encoder.image_fmt,
-        world_size=device_env.world_size,
-        create_decoder_pipe=create_doc_anno_pipe,
+        device_env=device_env.world_size,
+        local_rank=device_env.local_rank,
+        create_decoder_pipe=create_doc_anno_pipe, 
     )
 
     task.train_setup(
