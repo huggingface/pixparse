@@ -11,28 +11,33 @@ import torch.distributed as dist
 
 
 def is_distributed_env():
-    if 'WORLD_SIZE' in os.environ:
-        return int(os.environ['WORLD_SIZE']) > 1
-    if 'SLURM_NTASKS' in os.environ:
-        return int(os.environ['SLURM_NTASKS']) > 1
+    if "WORLD_SIZE" in os.environ:
+        return int(os.environ["WORLD_SIZE"]) > 1
+    if "SLURM_NTASKS" in os.environ:
+        return int(os.environ["SLURM_NTASKS"]) > 1
     return False
 
 
 def world_info_from_env():
     local_rank = 0
-    for v in ('LOCAL_RANK', 'MPI_LOCALRANKID', 'SLURM_LOCALID', 'OMPI_COMM_WORLD_LOCAL_RANK'):
+    for v in (
+        "LOCAL_RANK",
+        "MPI_LOCALRANKID",
+        "SLURM_LOCALID",
+        "OMPI_COMM_WORLD_LOCAL_RANK",
+    ):
         if v in os.environ:
             local_rank = int(os.environ[v])
             break
 
     global_rank = 0
-    for v in ('RANK', 'PMI_RANK', 'SLURM_PROCID', 'OMPI_COMM_WORLD_RANK'):
+    for v in ("RANK", "PMI_RANK", "SLURM_PROCID", "OMPI_COMM_WORLD_RANK"):
         if v in os.environ:
             global_rank = int(os.environ[v])
             break
 
     world_size = 1
-    for v in ('WORLD_SIZE', 'PMI_SIZE', 'SLURM_NTASKS', 'OMPI_COMM_WORLD_SIZE'):
+    for v in ("WORLD_SIZE", "PMI_SIZE", "SLURM_NTASKS", "OMPI_COMM_WORLD_SIZE"):
         if v in os.environ:
             world_size = int(os.environ[v])
             break
@@ -41,8 +46,8 @@ def world_info_from_env():
 
 
 class DeviceEnvType(Enum):
-    """ Device Environment Types
-    """
+    """Device Environment Types"""
+
     CPU = "cpu"
     CUDA = "cuda"
     XLA = "xla"
@@ -50,12 +55,39 @@ class DeviceEnvType(Enum):
 
 @dataclass
 class DeviceEnv:
+    """
+    Represents the environment for device setup and distributed processing.
+
+    Attributes:
+        device (torch.device): Current device (e.g., CUDA GPU) that the model/data should reside in.
+        world_size (Optional[int]): Total number of processes involved in the distributed setup.
+        local_rank (Optional[int]): Rank of the current process on the current node.
+        global_rank (Optional[int]): Rank of the current process globally across all nodes.
+
+    Init Arguments:
+        init_device_type (Optional[str]): The type of device to initialize (e.g., 'cuda', 'cpu').
+            Defaults to None, which means it will be inferred.
+        init_device_index (Optional[int]): Index of the CUDA device to initialize if multiple are present.
+            Defaults to None, indicating the first available device.
+        init_dist_backend (str): Backend for distributed training. Default is 'nccl'.
+        init_dist_url (str): URL for initializing distributed training. Default is 'env://'.
+
+    Methods:
+        is_global_primary: Checks if current process has the global rank 0.
+        is_local_primary: Checks if current process has the local rank 0.
+        is_primary: Checks if current process is either a local or global primary.
+        broadcast_object: Broadcasts an object from a source process to all other processes.
+        all_gather_object: Gathers objects from all processes and returns them.
+    """
+
     init_device_type: InitVar[Optional[str]] = None
     init_device_index: InitVar[Optional[int]] = None
-    init_dist_backend: InitVar[str] = 'nccl'
-    init_dist_url: InitVar[str] = 'env://'
+    init_dist_backend: InitVar[str] = "nccl"
+    init_dist_url: InitVar[str] = "env://"
 
-    device: torch.device = field(init=False)  # set from device_type + device_index or post_init logic
+    device: torch.device = field(
+        init=False
+    )  # set from device_type + device_index or post_init logic
     world_size: Optional[int] = None  # set by post_init from env when None
     local_rank: Optional[int] = None  # set by post_init from env when None
     global_rank: Optional[int] = None  # set by post_init from env when None
@@ -70,11 +102,11 @@ class DeviceEnv:
         return self.is_local_primary() if local else self.is_global_primary()
 
     def __post_init__(
-            self,
-            init_device_type: Optional[str],
-            init_device_index: Optional[int],
-            init_dist_backend: str,
-            init_dist_url: str,
+        self,
+        init_device_type: Optional[str],
+        init_device_index: Optional[int],
+        init_dist_backend: str,
+        init_dist_url: str,
     ):
         # FIXME support different device types, just using cuda to start
         assert torch.cuda.device_count()
@@ -85,8 +117,8 @@ class DeviceEnv:
             # setup distributed
             assert init_device_index is None
             self.local_rank = int(init_local_rank)
-            is_slurm = 'SLURM_PROCID' in os.environ
-            if 'SLURM_PROCID' in os.environ:
+            is_slurm = "SLURM_PROCID" in os.environ
+            if "SLURM_PROCID" in os.environ:
                 # os.environ['LOCAL_RANK'] = str(init_local_rank)
                 # os.environ['RANK'] = str(init_global_rank)
                 # os.environ['WORLD_SIZE'] = str(init_world_size)
@@ -108,10 +140,12 @@ class DeviceEnv:
                 assert self.world_size == init_world_size
                 assert self.global_rank == init_global_rank
 
-            self.device = torch.device('cuda:%d' % self.local_rank)
+            self.device = torch.device("cuda:%d" % self.local_rank)
             torch.cuda.set_device(self.local_rank)
         else:
-            self.device = torch.device('cuda' if init_device_index is None else f'cuda:{init_device_index}')
+            self.device = torch.device(
+                "cuda" if init_device_index is None else f"cuda:{init_device_index}"
+            )
             self.local_rank = 0
             self.world_size = 1
             self.global_rank = 0
