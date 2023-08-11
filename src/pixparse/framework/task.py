@@ -14,7 +14,7 @@ class Task:
     ):
         self.device_env = device_env
         self.monitor = monitor
-
+    
 class TaskEval(Task):  
     def __init__(
             self,

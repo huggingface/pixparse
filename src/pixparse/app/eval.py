@@ -75,15 +75,14 @@ def main():
     eval_cfg: EvalCfg = args.eval
     data_cfg: DataCfg = args.data
 
-    # create task config
-
-    task_cfg = TaskFactory.create_task_cfg(eval_cfg.task_name, args.task) 
-
     device_env = DeviceEnv()
+    task, task_cfg = TaskFactory.create_task(task_name=eval_cfg.task_name, task_args=args.task, device_env=device_env, monitor=None)
+
+
     random_seed(
         eval_cfg.seed, rank=device_env.global_rank
     )  # Seed variability for eval?
-    print(device_env)
+    _logger.info(f"Device env is {device_env}")
 
     assert (
         eval_cfg.output_dir is not None
@@ -119,9 +118,7 @@ def main():
             ), f"Cannot find checkpoint {checkpoint_path}: File not found"
 
             checkpoint = torch.load(eval_cfg.checkpoint_path)
-            state_dict = checkpoint["model"]
-
-
+        state_dict = checkpoint["model"]
         # Create safe metrics file path
 
         checkpoint_name = eval_cfg.checkpoint_path.replace("/", "_").replace(".pt", "")
@@ -130,7 +127,7 @@ def main():
         # bypass DDP module
         
         eval_state_dict = {k.replace("module.", ""): v for k, v in state_dict.items()}
-        task_cfg.model_state_dict = eval_state_dict
+        task.resume_state_dict = eval_state_dict
     else:
         # Get a generic name for external model on chosen dataset
         metrics_file_name = f"{eval_cfg.task_name}-{eval_cfg.dataset_name}-metrics.json"
@@ -141,9 +138,7 @@ def main():
         _logger.info(task_cfg)
         _logger.info(eval_cfg)
 
-    # Instantiate eval task
 
-    task = TaskFactory.create_task(eval_cfg.task_name, task_cfg, device_env, monitor)
 
     loaders = {}
     assert data_cfg.eval is not None, f"data_cfg.eval is not set."
@@ -154,7 +149,7 @@ def main():
         is_train=False,
         image_preprocess=task.image_preprocess_eval,
         anno_preprocess=task.anno_preprocess_eval,
-        create_decoder_pipe=create_image_text_pipe,
+        create_decoder_pipe=create_image_text_pipe, # TODO abstract away type of decoder needed
         # world_size=device_env.world_size
     )
 

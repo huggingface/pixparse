@@ -74,13 +74,10 @@ def main():
     train_cfg: TrainCfg = args.train
     data_cfg: DataCfg = args.data
 
-    # Create task config 
-
-    task_cfg = TaskFactory.create_task_cfg(train_cfg.task_name, args.task) 
     device_env = DeviceEnv()
-
+    task, task_cfg = TaskFactory.create_task(task_name=train_cfg.task_name, task_args=args.task, device_env=device_env, monitor=None)
     random_seed(train_cfg.seed, rank=device_env.global_rank)
-    print(device_env)
+    _logger.info(f"Device env is {device_env}")
 
     # get the name of the experiments
     if train_cfg.experiment is None:
@@ -104,14 +101,14 @@ def main():
         os.makedirs(experiment_path, exist_ok=True)
         log_path = os.path.join(experiment_path, train_cfg.log_filename)
         if os.path.exists(log_path) and not resume_latest:
-            print(
+            _logger.error(
                 "Error. Experiment already exists. Use --experiment {} to specify a new experiment."
             )
             return -1
 
     # Setup text logger
     setup_logging(log_path)
-    monitor = Monitor(
+    task.monitor = Monitor(
         train_cfg.experiment,
         output_dir=experiment_path,
         wandb=train_cfg.wandb,
@@ -119,6 +116,7 @@ def main():
         tensorboard=train_cfg.tensorboard,
         output_enabled=device_env.is_primary(),
     )
+    
 
     checkpoint_dir = train_cfg.checkpoint_dir or os.path.join(experiment_path, 'checkpoints')
     os.makedirs(checkpoint_dir, exist_ok=True)
@@ -126,8 +124,6 @@ def main():
     if device_env.is_primary():
         _logger.info(task_cfg)
         _logger.info(train_cfg)
-
-    task = TaskFactory.create_task(train_cfg.task_name, task_cfg, device_env, monitor)
 
     loaders = {}
     assert (data_cfg.train is not None) or (data_cfg.eval is not None), f"Neither data_cfg.train nor data_cfg.eval are set."
@@ -139,9 +135,8 @@ def main():
         anno_preprocess=task.anno_preprocess_train,
         image_fmt=task_cfg.model.image_encoder.image_fmt,
         world_size=device_env.world_size,
-        create_decoder_pipe=create_doc_anno_pipe,
+        create_decoder_pipe=create_doc_anno_pipe, # TODO abstract away type of decoder needed
     )
-
     task.train_setup(
         num_batches_per_interval=loaders['train'].num_batches,
     )
