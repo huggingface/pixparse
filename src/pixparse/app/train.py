@@ -25,6 +25,7 @@ class TrainCfg:
     output_dir: str = './output'
     log_filename: str = 'out.log'
     s3_bucket: str = ""
+    resume: bool = False
     checkpoint_path: str = ""
     output_checkpoint_dir: Optional[str] = None  # default output_dir/checkpoints
     seed: int = 42
@@ -121,23 +122,27 @@ def main():
     )
     
     # ----- Model resuming from checkpoint -----
+    # FIXME make optional for resume. Task needs to have an attribute state_dict
+    if train_cfg.resume:
 
-    checkpoint_path = train_cfg.checkpoint_path
-    train_cfg = replace(train_cfg, checkpoint_path=checkpoint_path)
+        checkpoint_path = train_cfg.checkpoint_path
+        train_cfg = replace(train_cfg, checkpoint_path=checkpoint_path)
 
-    # FIXME check if path is local or s3?
-    if train_cfg.s3_bucket != "":
-        _logger.info("s3 bucket specified. Loading checkpoint from s3.")
-        checkpoint = load_checkpoint_from_s3(
-            train_cfg.s3_bucket, train_cfg.checkpoint_path
-        )
-    else:
-        assert os.path.isfile(
-            checkpoint_path
-        ), f"Cannot find checkpoint {checkpoint_path}: File not found"
+        # FIXME check if path is local or s3?
+        if train_cfg.s3_bucket != "":
+            _logger.info("s3 bucket specified. Loading checkpoint from s3.")
+            checkpoint = load_checkpoint_from_s3(
+                train_cfg.s3_bucket, train_cfg.checkpoint_path
+            )
+        else:
+            assert os.path.isfile(
+                checkpoint_path
+            ), f"Cannot find checkpoint {checkpoint_path}: File not found"
 
-        checkpoint = torch.load(train_cfg.checkpoint_path)
+            checkpoint = torch.load(train_cfg.checkpoint_path)
         state_dict = checkpoint["model"]
+        task.state_dict = state_dict
+        task.resume = True
 
     # ------------------------------------------
 
