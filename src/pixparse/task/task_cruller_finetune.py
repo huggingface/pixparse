@@ -17,13 +17,18 @@ from pixparse.framework import TaskTrainCfg, TaskTrain, DeviceEnv, Monitor
 from pixparse.models import Cruller, ModelCfg, get_model_config
 from pixparse.tokenizers import TokenizerHF, TokenizerCfg
 from pixparse.data import preprocess_ocr_anno, preprocess_text_anno
-from pixparse.utils.ocr_utils import get_ocr_metrics
+from timm.layers import SelectAdaptivePool2d
 
+from typing import Dict, List
 
+from collections import OrderedDict
 
 _logger = logging.getLogger(__name__)
 
-
+class GetCLSToken(nn.Module):
+    def forward(self, x):
+        return x[:, 0, :]
+            
 @dataclass
 class TaskCrullerFinetuneCfg(TaskTrainCfg):
     model_name: Optional[str] = None  # if model_name set, loads a pre-defined config in models/configs
@@ -66,6 +71,9 @@ class TaskCrullerFinetune(TaskTrain):
         self.max_position_embeddings = cfg.model.text_decoder.max_length
         self.text_anno_fn = False  # set for image-text dataset experiments
         self.tokenizer = TokenizerHF(cfg.tokenizer)
+
+        self.state_dict = OrderedDict()
+        self.resume = False
         
         # Setup task specific tokens
         # NOTE: Donut appears to add tokens on the fly during dataset init, requires iterating
@@ -123,24 +131,179 @@ class TaskCrullerFinetune(TaskTrain):
                 std=self.img_std,
             )
         ])
+        
 
-    def train_setup(self, *args, **kwargs):
+        # "pool" results and setup classification head
+        
+
+    def train_setup(self, num_batches_per_interval: int):
+        # Load model
+
+        # First load base model, then specialize it to fine-tuning end
+        
+        # FIXME pass along resume arg here
+        if self.resume:
+            _logger.info(f"Resuming from existing checkpoint. ")
+            self.state_dict = {k.replace("module.", ""): v for k, v in self.state_dict.items()}
+            self.model.load_state_dict(self.state_dict)
+        
+        self.model = nn.Sequential(
+                    OrderedDict(
+                        [("encoder", self.model.image_encoder),
+                          ("token_pool", GetCLSToken()),
+                          ("final_fc", nn.Linear(768, 16)), # 16 classes in RVLCDIP
+                          #nn.Softmax(16)
+                        ]))
         # weights / move to device until here.
         device = self.device_env.device
+        print(f"Local rank for this process: {self.device_env.local_rank}")
+        device = torch.device(f"cuda:{self.device_env.local_rank}")
         self.model.to(device)
+        if self.device_env.world_size > 1:
+            # NOTE: the plan is to add option for FSDP w/ HYBRID_SHARD strategy to extend
+            # model size capacity beyond DDP w/o overloading HF cluster NCCL throughput.
+            self.model = torch.nn.parallel.DistributedDataParallel(
+                self.model,
+                device_ids=[device],
+                static_graph=True,
+            )
+            self.has_no_sync = hasattr(self.model, 'no_sync')
+
+        opt_kwargs = {}
+        if self.cfg.opt.betas is not None:
+            opt_kwargs['betas'] = self.cfg.opt.betas
+        if self.cfg.opt.momentum is not None:
+            opt_kwargs['momentum'] = self.cfg.opt.momentum
+        
+        # self.optimizer = create_optimizer_v2(
+        #    self.model,
+        #    self.cfg.opt.optimizer,
+        #    lr=self.cfg.opt.learning_rate,
+        #    eps=self.cfg.opt.eps,
+        #    **opt_kwargs,
+        #)
+        self.optimizer = torch.optim.AdamW([p for n, p in self.model.named_parameters() if "final_fc" in n], lr=self.cfg.opt.learning_rate)
+
+        if self.cfg.amp:
+            self.scaler = timm.utils.NativeScaler()
+            self.autocast = partial(torch.autocast, device_type=device.type, dtype=self.amp_dtype)
+        else:
+            self.scaler = None
+            self.autocast = nullcontext
+
+        # FIXME will need two paths here to support interval vs step based durations
+        #  in either case LR is always stepped with each optimizer update (train step)
+        self.num_steps_per_interval = num_batches_per_interval // self.cfg.opt.grad_accum_steps
+        self.scheduler, num_scheduled_epochs = create_scheduler_v2(
+            self.optimizer,
+            self.cfg.opt.scheduler,
+            warmup_lr=self.cfg.opt.warmup_learning_rate,
+            warmup_epochs=self.num_warmup_intervals,
+            num_epochs=self.num_intervals,
+            step_on_epochs=False,  # sched is stepped on updates
+            updates_per_epoch=self.num_steps_per_interval,
+        )
+        self.scheduler.step_update(0)
+
+
+    def collate_fn(self, batch):
+        """
+        basic collator for PIL images, as returned by rvlcdip dataloader (among others)
+        """
+        images = [item['image'] for item in batch]
+        labels = [item['label'] for item in batch]
+        
+        transform = self.image_preprocess_train
+        
+        images = torch.stack([transform(img) for img in images])
+        labels = torch.tensor(labels, dtype=torch.int64)
+        return {'image': images, 'label': labels}
+
 
     def train_interval_start(self):
         self.optimizer.zero_grad()
         self.interval_batch_idx = 0
 
     def train_interval_end(self):
-        pass
+        self.monitor.log_phase('finetune', self.interval_idx)
+        self.interval_idx += 1
 
     def train_step(self, sample: Dict[str, Any]) -> Dict[str, Any]:
-        pass
+        image_input = sample['image']
+        label = sample['label']
+        result = {}
+
+        image_input = image_input.to(self.device_env.device, non_blocking=True)
+        label = label.to(self.device_env.device, non_blocking=True)
+
+        accum_steps = self.cfg.opt.grad_accum_steps
+        need_update = (self.interval_batch_idx + 1) % accum_steps == 0
+
+        def _forward():
+            with self.autocast():
+                outputs = self.model(image_input)
+                loss = self.loss(
+                    outputs,
+                    label,
+                )
+            if accum_steps > 1:
+                loss /= accum_steps
+            return loss
+
+        def _backward(_loss):
+            if self.scaler is not None:
+                self.scaler(
+                    _loss,
+                    self.optimizer,
+                    clip_grad=self.cfg.opt.clip_grad_value,
+                    clip_mode=self.cfg.opt.clip_grad_mode,
+                    parameters=self.model.parameters(),
+                    need_update=need_update,
+                )
+            else:
+                _loss.backward()
+                if need_update:
+                    if self.cfg.opt.clip_grad_value is not None:
+                        timm.utils.dispatch_clip_grad(
+                            self.model.parameters(),
+                            value=self.cfg.opt.clip_grad_value,
+                            mode=self.cfg.opt.clip_grad_mode,
+                        )
+                    self.optimizer.step()
+
+    
+        if self.has_no_sync and not need_update:
+            with self.model.no_sync():
+                loss = _forward()
+                _backward(loss)
+        else:
+            loss = _forward()
+            _backward(loss)
+
+
+        self.batch_idx += 1
+        self.interval_batch_idx += 1
+        if self.step % self.eval_frequency == 0:
+            self.monitor.log_step(
+                'finetune',
+                step_idx=self.step,
+                step_end_idx=self.num_intervals * self.num_steps_per_interval,
+                interval=self.interval_idx,
+                loss=loss.item(),
+                lr=self.get_current_lr(),
+                metrics=None,
+                eval_data=None
+            )
+
+        if not need_update:
+            return result
+
+        self.step += 1
+        self.scheduler.step_update(self.step)
+        self.optimizer.zero_grad()
 
     def eval_step(self, sample: Dict[str, Any]) -> Dict[str, Any]:
-        # TODO Remove eval method from train dataclass
+        # TODO Remove eval method from train dataclass?
         pass
 
     def get_current_lr(self):
