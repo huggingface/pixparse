@@ -174,15 +174,24 @@ class TaskCrullerFinetune(TaskTrain):
             opt_kwargs['betas'] = self.cfg.opt.betas
         if self.cfg.opt.momentum is not None:
             opt_kwargs['momentum'] = self.cfg.opt.momentum
+
         
-        # self.optimizer = create_optimizer_v2(
-        #    self.model,
-        #    self.cfg.opt.optimizer,
-        #    lr=self.cfg.opt.learning_rate,
-        #    eps=self.cfg.opt.eps,
-        #    **opt_kwargs,
-        #)
-        self.optimizer = torch.optim.AdamW([p for n, p in self.model.named_parameters() if "final_fc" in n], lr=self.cfg.opt.learning_rate)
+        
+        # standard opt
+
+        self.optimizer = create_optimizer_v2(
+            self.model,
+            self.cfg.opt.optimizer,
+            lr=self.cfg.opt.learning_rate,
+            eps=self.cfg.opt.eps,
+            layer_decay=0.1,
+            **opt_kwargs,
+        )
+        
+
+        #  only classifier
+
+        #self.optimizer = torch.optim.AdamW([p for n, p in self.model.named_parameters() if "final_fc" in n], lr=self.cfg.opt.learning_rate)
 
         if self.cfg.amp:
             self.scaler = timm.utils.NativeScaler()
