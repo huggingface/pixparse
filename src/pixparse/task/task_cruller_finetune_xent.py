@@ -30,7 +30,7 @@ class GetCLSToken(nn.Module):
         return x[:, 0, :]
             
 @dataclass
-class TaskCrullerFinetuneCfg(TaskTrainCfg):
+class TaskCrullerFinetuneXentCfg(TaskTrainCfg):
     model_name: Optional[str] = None  # if model_name set, loads a pre-defined config in models/configs
     model: ModelCfg = field(default_factory=ModelCfg)  # FIXME rename model_cfg to diff from model_name?
     tokenizer: TokenizerCfg = field(default_factory=TokenizerCfg)
@@ -46,10 +46,10 @@ class TaskCrullerFinetuneCfg(TaskTrainCfg):
         else:
             self.model_name = 'custom'
 
-class TaskCrullerFinetune(TaskTrain):
+class TaskCrullerFinetuneXent(TaskTrain):
     def __init__(
             self,
-            cfg: TaskCrullerFinetuneCfg,
+            cfg: TaskCrullerFinetuneXentCfg,
             device_env: DeviceEnv,
             monitor: Monitor = None,
     ):
