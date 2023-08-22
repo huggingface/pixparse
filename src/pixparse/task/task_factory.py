@@ -19,8 +19,14 @@ from pixparse.task import (
     TaskDonutEvalOCRCfg,
     TaskCrullerPretrain,
     TaskCrullerPretrainCfg,
-    TaskCrullerFinetune,
-    TaskCrullerFinetuneCfg
+    TaskCrullerFinetuneRVLCDIP,
+    TaskCrullerFinetuneRVLCDIPCfg,
+#    TaskCrullerFinetuneCORD,
+#    TaskCrullerFinetuneCORDCfg,
+#    TaskCrullerFinetuneTrainTicket,
+#    TaskCrullerFinetuneTrainTicketCfg,
+    TaskCrullerFinetuneXent,
+    TaskCrullerFinetuneXentCfg,
 )
 
 from chug.common import LoaderBundle
@@ -39,7 +45,16 @@ class TaskFactory:
         "cruller_eval_ocr": (TaskCrullerEvalOCR, TaskCrullerEvalOCRCfg),
         "donut_eval_ocr": (TaskDonutEvalOCR, TaskDonutEvalOCRCfg),
         "cruller_pretrain": (TaskCrullerPretrain, TaskCrullerPretrainCfg),
-        "cruller_finetune": (TaskCrullerFinetune, TaskCrullerFinetuneCfg)
+        "cruller_finetune_rvlcdip": (
+            TaskCrullerFinetuneRVLCDIP,
+            TaskCrullerFinetuneRVLCDIPCfg,
+        ),
+        #"cruller_finetune_cord": (TaskCrullerFinetuneCORD, TaskCrullerFinetuneCORDCfg),
+        #"cruller_finetune_trainticket": (
+        #    TaskCrullerFinetuneTrainTicket,
+        #    TaskCrullerFinetuneTrainTicketCfg,
+        #),
+        "cruller_finetune_xent": (TaskCrullerFinetuneXent, TaskCrullerFinetuneXentCfg),
     }
 
     @classmethod
