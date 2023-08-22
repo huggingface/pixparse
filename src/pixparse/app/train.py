@@ -92,9 +92,11 @@ def main():
             date_str = device_env.broadcast_object(date_str)
         experiment = '-'.join([
             date_str,
-            f"model_{model_name_safe}",
-            f"lr_{task_cfg.opt.learning_rate}",
+            f"task_{train_cfg.task_name}",
+            f"model_{model_name_safe}",*
+            f"lr_{str(task_cfg.opt.learning_rate)}",
             f"b_{data_cfg.train.batch_size}",
+            #TODO make completion of exp name derived from essential hparams
         ])
         train_cfg = replace(train_cfg, experiment=experiment)
 
@@ -122,7 +124,10 @@ def main():
     )
     
     # ----- Model resuming from checkpoint -----
-    # FIXME make optional for resume. Task needs to have an attribute state_dict
+    # FIXME make optional for resume. 
+    # Task needs to have 
+    # -- an attribute OrderedDict state_dict 
+    # -- an attribute bool resume
     if train_cfg.resume:
 
         checkpoint_path = train_cfg.checkpoint_path
