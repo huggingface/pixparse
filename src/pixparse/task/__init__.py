@@ -1,5 +1,6 @@
 from .task_cruller_pretrain import TaskCrullerPretrain, TaskCrullerPretrainCfg
 from .task_cruller_finetune_RVLCDIP import TaskCrullerFinetuneRVLCDIP, TaskCrullerFinetuneRVLCDIPCfg
+from .task_cruller_finetune_CORD import TaskCrullerFinetuneCORD, TaskCrullerFinetuneCORDCfg
 from .task_cruller_finetune_xent import (
     TaskCrullerFinetuneXent,
     TaskCrullerFinetuneXentCfg,
