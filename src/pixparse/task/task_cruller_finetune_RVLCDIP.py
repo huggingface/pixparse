@@ -78,7 +78,7 @@ class TaskCrullerFinetuneRVLCDIP(TaskTrain):
                 torch.bfloat16 if cfg.dtype in ("bfloat16", "bf16") else torch.float16
             )
 
-        self.task_start_token = "<s_rvlcdip  >"
+        self.task_start_token = "<s_rvlcdip>"
         self.prompt_end_token = self.task_start_token
         self.max_position_embeddings = cfg.model.text_decoder.max_length
         self.text_anno_fn = True  # set for image-text dataset experiments
@@ -273,10 +273,10 @@ class TaskCrullerFinetuneRVLCDIP(TaskTrain):
         # model doesn't need to predict pad token
         target[target == self.tokenizer.trunk.pad_token_id] = ignore_id
         # model doesn't need to predict prompt (for VQA)
-        prompt_end_token_id = self.tokenizer.trunk.convert_tokens_to_ids(
-            self.prompt_end_token
-        )
-        target[: torch.nonzero(target == prompt_end_token_id).sum() + 1] = ignore_id
+        #prompt_end_token_id = self.tokenizer.trunk.convert_tokens_to_ids(
+        #    self.prompt_end_token
+        #)
+        #target[: torch.nonzero(target == prompt_end_token_id).sum() + 1] = ignore_id
         return target
 
     def collate_fn(self, batch):
@@ -285,15 +285,22 @@ class TaskCrullerFinetuneRVLCDIP(TaskTrain):
         """
         images = [item["image"] for item in batch]
         labels = [item["label"] for item in batch]
+
+        tokenizer_fn = lambda x: self.tokenizer.trunk(x, #FIXME move this batcher/tokenizer elsewhere
+            add_special_tokens=False,
+            return_tensors='pt',
+            max_length=128,
+            padding='max_length',
+            truncation=True).input_ids[0]
+
         labels_tokens = [
-            self.tokenizer.trunk.encode("<" + self.int2str[label] + "/>")
+            torch.tensor(tokenizer_fn("<" + self.int2str[label] + "/>"))
             for label in labels
         ]
-
         transform = self.image_preprocess_train
 
         images = torch.stack([transform(img) for img in images])
-        labels = torch.tensor(labels_tokens, dtype=torch.int64)
+        labels = torch.stack(labels_tokens)
         targets = torch.stack([self.text_input_to_target(text) for text in labels])
 
         return {"image": images, "label": labels, "text_target": targets}
@@ -306,8 +313,8 @@ class TaskCrullerFinetuneRVLCDIP(TaskTrain):
 
         image_input = image_input.to(self.device_env.device, non_blocking=True)
         label = label.to(self.device_env.device, non_blocking=True)
-        text_target = text_target.to(self.device_env.device, non_blocking=True)*
-
+        text_target = text_target.to(self.device_env.device, non_blocking=True)
+        
         accum_steps = self.cfg.opt.grad_accum_steps
         need_update = (self.interval_batch_idx + 1) % accum_steps == 0
 
