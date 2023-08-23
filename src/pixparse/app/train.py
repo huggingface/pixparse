@@ -93,8 +93,8 @@ def main():
         experiment = '-'.join([
             date_str,
             f"task_{train_cfg.task_name}",
-            f"model_{model_name_safe}",*
-            f"lr_{str(task_cfg.opt.learning_rate)}",
+            f"model_{model_name_safe}",
+            f"lr_{'{:.1e}'.format(task_cfg.opt.learning_rate)}",
             f"b_{data_cfg.train.batch_size}",
             #TODO make completion of exp name derived from essential hparams
         ])

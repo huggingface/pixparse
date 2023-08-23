@@ -124,11 +124,11 @@ class TaskCrullerFinetuneRVLCDIP(TaskTrain):
             2: "email",
             3: "handwritten",
             4: "advertisement",
-            5: "scientific report",
-            6: "scientific publication",
+            5: "scientific_report",
+            6: "scientific_publication",
             7: "specification",
-            8: "file folder",
-            9: "news article",
+            8: "file_folder",
+            9: "news_article",
             10: "budget",
             11: "invoice",
             12: "presentation",
@@ -273,10 +273,10 @@ class TaskCrullerFinetuneRVLCDIP(TaskTrain):
         # model doesn't need to predict pad token
         target[target == self.tokenizer.trunk.pad_token_id] = ignore_id
         # model doesn't need to predict prompt (for VQA)
-        #prompt_end_token_id = self.tokenizer.trunk.convert_tokens_to_ids(
-        #    self.prompt_end_token
-        #)
-        #target[: torch.nonzero(target == prompt_end_token_id).sum() + 1] = ignore_id
+        prompt_end_token_id = self.tokenizer.trunk.convert_tokens_to_ids(
+            self.prompt_end_token
+        )
+        target[: torch.nonzero(target == prompt_end_token_id).sum() + 1] = ignore_id
         return target
 
     def collate_fn(self, batch):
@@ -289,12 +289,12 @@ class TaskCrullerFinetuneRVLCDIP(TaskTrain):
         tokenizer_fn = lambda x: self.tokenizer.trunk(x, #FIXME move this batcher/tokenizer elsewhere
             add_special_tokens=False,
             return_tensors='pt',
-            max_length=128,
+            max_length=5,
             padding='max_length',
             truncation=True).input_ids[0]
 
-        labels_tokens = [
-            torch.tensor(tokenizer_fn("<" + self.int2str[label] + "/>"))
+        labels_tokens = [ 
+            tokenizer_fn(self.task_start_token + self.tokenizer.trunk.bos_token + "<" + self.int2str[label] + "/>" + self.tokenizer.trunk.eos_token)
             for label in labels
         ]
         transform = self.image_preprocess_train
@@ -313,8 +313,7 @@ class TaskCrullerFinetuneRVLCDIP(TaskTrain):
 
         image_input = image_input.to(self.device_env.device, non_blocking=True)
         label = label.to(self.device_env.device, non_blocking=True)
-        text_target = text_target.to(self.device_env.device, non_blocking=True)
-        
+        text_target = text_target.to(self.device_env.device, non_blocking=True)        
         accum_steps = self.cfg.opt.grad_accum_steps
         need_update = (self.interval_batch_idx + 1) % accum_steps == 0
 
