@@ -25,6 +25,7 @@ from pixparse.task.task_factory import TaskFactory
 
 from chug.webdataset import create_doc_anno_pipe, create_image_text_pipe
 
+from collections import OrderedDict
 _logger = logging.getLogger("eval")
 
 
@@ -120,7 +121,10 @@ def main():
             ), f"Cannot find checkpoint {checkpoint_path}: File not found"
 
             checkpoint = torch.load(eval_cfg.checkpoint_path)
-        state_dict = checkpoint["model"]
+        if isinstance(checkpoint, OrderedDict):
+            state_dict = checkpoint
+        else:
+            state_dict = checkpoint["model"]
         # Create safe metrics file path
 
         checkpoint_name = eval_cfg.checkpoint_path.replace("/", "_").replace(".pt", "")
@@ -146,11 +150,15 @@ def main():
     assert data_cfg.eval is not None, f"data_cfg.eval is not set."
 
     # FIXME add common functionality for loader selection per task
-    loaders["eval_FUNSD"] = create_loader(
+    loaders["eval"] = create_loader(
         data_cfg.eval,
         is_train=False,
+        collate_fn=task.collate_fn,
         image_preprocess=task.image_preprocess_eval,
         anno_preprocess=task.anno_preprocess_eval,
+        image_fmt=task_cfg.model.image_encoder.image_fmt,
+        world_size=device_env.world_size,
+        local_rank=device_env.local_rank,
         create_decoder_pipe=create_image_text_pipe, # TODO abstract away type of decoder needed
         # world_size=device_env.world_size
     )

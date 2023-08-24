@@ -13,8 +13,8 @@ class DatasetCfg:
     source: str
     num_samples: int
     batch_size: int
+    split: str  # has to be "train", "test", "val"
     format: str = "webdataset" # e.g. "hf_dataset" or "webdataset"
-    split: str = "train"
     num_workers: int = 4
 
 
