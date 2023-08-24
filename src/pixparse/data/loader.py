@@ -7,6 +7,10 @@ from typing import Callable
 
 from datasets import load_dataset
 from torch.utils.data import DataLoader, DistributedSampler
+from datasets import VerificationMode
+from pixparse.data.datasets_utils import SafeDataset
+
+from datasets import load_dataset
 
 class GenericLoader(DataLoader):
     """
@@ -76,10 +80,11 @@ def create_loader(
         )
     elif cfg.format == "hf_dataset":
         # In the case of hf datasets, we use the collator defined at task level
-        dataset = load_dataset(cfg.source)[cfg.split]
+        dataset = load_dataset(cfg.source, verification_mode=VerificationMode.ALL_CHECKS)[cfg.split]
+        dataset = SafeDataset(dataset)
         training_sampler = DistributedSampler(
             dataset, rank=local_rank, shuffle=True, seed=seed, num_replicas=world_size, drop_last=True
-        )
+        ) # FIXME should be global_rank
         if is_train:
             # create a shared epoch store to sync epoch to dataloader worker proc
             shared_interval_count = SharedCount(count=start_interval)
