@@ -24,6 +24,9 @@ class TaskEval(Task):
     ):
         super().__init__(device_env=device_env, monitor=monitor)
     
+    def collate_fn(self, batch):
+        pass
+
     def setup(self, *args, **kwargs):
         pass
 
@@ -61,6 +64,9 @@ class TaskTrain(Task):
         self.scheduler = None
         self.scaler = None
         self.autocast = None
+
+    def collate_fn(self, batch):
+        pass
 
     def train_setup(self, *args, **kwargs):
         pass
