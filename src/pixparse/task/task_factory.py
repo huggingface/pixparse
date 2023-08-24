@@ -17,6 +17,8 @@ from pixparse.task import (
     TaskCrullerEvalOCRCfg,
     TaskDonutEvalOCR,
     TaskDonutEvalOCRCfg,
+    TaskCrullerEvalRVLCDIP,
+    TaskCrullerEvalRVLCDIPCfg,
     TaskCrullerPretrain,
     TaskCrullerPretrainCfg,
     TaskCrullerFinetuneRVLCDIP,
@@ -43,6 +45,7 @@ class TaskFactory:
 
     TASK_CLASS_REGISTRY = {
         "cruller_eval_ocr": (TaskCrullerEvalOCR, TaskCrullerEvalOCRCfg),
+        "cruller_eval_rvlcdip": (TaskCrullerEvalRVLCDIP, TaskCrullerEvalRVLCDIPCfg),
         "donut_eval_ocr": (TaskDonutEvalOCR, TaskDonutEvalOCRCfg),
         "cruller_pretrain": (TaskCrullerPretrain, TaskCrullerPretrainCfg),
         "cruller_finetune_rvlcdip": (
