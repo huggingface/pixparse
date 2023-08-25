@@ -346,7 +346,7 @@ class TaskCrullerFinetuneCORD(TaskTrain):
             "image": images,
             "label": text_inputs,
             "text_target": targets,
-        }  # FIXME need to remove pad tokens + irrelevant computational tokens
+        }  
 
     def train_step(self, sample: Dict[str, Any]) -> Dict[str, Any]:
         image_input = sample["image"]
