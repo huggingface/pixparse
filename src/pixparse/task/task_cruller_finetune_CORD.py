@@ -7,7 +7,7 @@ from typing import Optional, List, Any
 import torch
 import torch.nn as nn
 import torchvision.transforms as transforms
-
+from torchvision.transforms import functional as transformsF
 import timm
 import timm.utils
 from timm.optim import create_optimizer_v2
@@ -23,7 +23,9 @@ from typing import Dict, List
 
 from collections import OrderedDict
 
-from ast import literal_eval 
+from pixparse.utils.json_utils import json2token
+
+from ast import literal_eval
 
 _logger = logging.getLogger(__name__)
 
@@ -97,11 +99,64 @@ class TaskCrullerFinetuneCORD(TaskTrain):
             "<sep/>",  # JSON list separator
             self.task_start_token,  # task start (based on dataset/task)
             self.prompt_end_token,  # prompt end (or task_start for pretrain)
+            "</s_service_price>", # This is only for CORD. To reproduce it, check pixparse.utils.dataset_utils.get_additional_tokens_from_dataset
+            "<s_subtotal_price>",
+            "<s_discountprice>",
+            "</s_sub>",
+            "<s_sub>",
+            "</s_total_etc>",
+            "</s_discountprice>",
+            "</s_vatyn>",
+            "</s_subtotal_price>",
+            "<s_changeprice>",
+            "</s_total>",
+            "</s_unitprice>",
+            "<s_emoneyprice>",
+            "</s_tax_price>",
+            "</s_othersvc_price>",
+            "</s_cnt>",
+            "<s_vatyn>",
+            "<s_unitprice>",
+            "<s_total>",
+            "<s_price>",
+            "</s_price>",
+            "<s_sub_total>",
+            "</s_num>",
+            "<s_total_etc>",
+            "</s_creditcardprice>",
+            "<s_tax_price>",
+            "<s_menu>",
+            "<s_nm>",
+            "<s_menutype_cnt>",
+            "</s_changeprice>",
+            "<s_num>",
+            "<s_itemsubtotal>",
+            "</s_etc>",
+            "<s_creditcardprice>",
+            "</s_menuqty_cnt>",
+            "</s_emoneyprice>",
+            "<s_menuqty_cnt>",
+            "<s_discount_price>",
+            "</s_menu>",
+            "</s_sub_total>",
+            "<s_etc>",
+            "</s_void_menu>",
+            "<s_cashprice>",
+            "</s_discount_price>",
+            "</s_total_price>",
+            "</s_nm>",
+            "<s_service_price>",
+            "<s_othersvc_price>",
+            "</s_itemsubtotal>",
+            "<s_void_menu>",
+            "<s_total_price>",
+            "</s_cashprice>",
+            "</s_menutype_cnt>",
+            "<s_cnt>",
         ]
         newly_added_num = self.tokenizer.trunk.add_special_tokens(
             {"additional_special_tokens": sorted(set(special_tokens))}
         )
-
 
         self.vocab_size = len(self.tokenizer.trunk)
 
@@ -147,6 +202,7 @@ class TaskCrullerFinetuneCORD(TaskTrain):
         self.image_preprocess_train = transforms.Compose(
             [
                 transforms.ToTensor(),
+                transforms.Grayscale(),
                 transforms.Resize(
                     cfg.model.image_encoder.image_size,
                     interpolation=transforms.InterpolationMode.BICUBIC,
@@ -206,6 +262,7 @@ class TaskCrullerFinetuneCORD(TaskTrain):
             self.cfg.opt.optimizer,
             lr=self.cfg.opt.learning_rate,
             eps=self.cfg.opt.eps,
+            layer_decay=self.cfg.opt.layer_decay,
             **opt_kwargs,
         )
 
@@ -234,61 +291,72 @@ class TaskCrullerFinetuneCORD(TaskTrain):
         )
         self.scheduler.step_update(0)
 
-    def json2token(self, obj, update_special_tokens_for_json_key: bool = True, sort_json_key: bool = True):
-        """
-        Convert an ordered JSON object into a token sequence.
-        """
-        # FIXME Currently broken, was outputting broken apart pieces of json hierarchies
+    def text_input_to_target(self, text_input, ignore_id=-100):
+        target = text_input.clone()
+        # model doesn't need to predict pad token
+        target[target == self.tokenizer.trunk.pad_token_id] = ignore_id
+        # model doesn't need to predict prompt (for VQA)
+        prompt_end_token_id = self.tokenizer.trunk.convert_tokens_to_ids(
+            self.prompt_end_token
+        )
+        slice_id = torch.nonzero(target == prompt_end_token_id).sum() + 1
+        target[:slice_id] = ignore_id
+        return target
+        #prompt_end_token_id = self.tokenizer.trunk.convert_tokens_to_ids(
+        #    self.prompt_end_token
+        #)
+        #if text_input == self.tokenizer.trunk.pad_token_id or text_input == prompt_end_token_id:
+        #    return torch.tensor(ignore_id)
+        #else:
+        #    return text_input
 
-        if type(obj) == dict:
-            if len(obj) == 1 and "text_sequence" in obj:
-                return obj["text_sequence"]
-            else:
-                output = ""
-                if sort_json_key:
-                    keys = sorted(obj.keys(), reverse=True)
-                else:
-                    keys = obj.keys()
-                for k in keys:
-                    if update_special_tokens_for_json_key:
-                        self.tokenizer.trunk.add_special_tokens({"additional_special_tokens":[fr"<s_{k}>", fr"</s_{k}>"]})
-                    output += (
-                        fr"<s_{k}>"
-                        + self.json2token(obj[k], update_special_tokens_for_json_key, sort_json_key)
-                        + fr"</s_{k}>"
-                    )
-                return output
-        elif type(obj) == list:
-            return r"<sep/>".join(
-                [self.json2token(item, update_special_tokens_for_json_key, sort_json_key) for item in obj]
-            )
-        else:
-            obj = str(obj)
-            if f"<{obj}/>" in self.tokenizer.trunk.all_special_tokens:
-                obj = f"<{obj}/>"  # for categorical special tokens
-            return obj
+            
 
     def collate_fn(self, batch):
         """
         basic collator for PIL images, as returned by rvlcdip dataloader (among others)
         """
+        tokenizer_fn = lambda x: self.tokenizer.trunk(
+            x,  # FIXME move this batcher/tokenizer elsewhere
+            add_special_tokens=False,
+            return_tensors="pt",
+            max_length=512,
+            padding="max_length",
+            truncation=True,
+        ).input_ids[0]
+
         images = [item["image"] for item in batch]
-        text_inputs = [literal_eval(item["ground_truth"])['gt_parse'] for item in batch]
-        text_inputs = [self.task_start_token + self.json2token(text) for text in text_inputs]
+        raw_texts = [literal_eval(item["ground_truth"])["gt_parse"] for item in batch]
+        inputs_to_stack = []
+        for text in raw_texts:
+            tokens_from_json, _ = json2token(text, self.tokenizer.trunk.all_special_tokens)
+            inputs_to_stack.append(tokenizer_fn(
+                self.task_start_token
+                + self.tokenizer.trunk.bos_token
+                + tokens_from_json
+            ))
+        text_inputs = torch.stack(
+            inputs_to_stack
+        )
+        targets = torch.stack([self.text_input_to_target(text) for text in text_inputs])
+
         transform = self.image_preprocess_train
         images = torch.stack([transform(img) for img in images])
-        return {"image": images, "label": text_inputs, "text_target": text_inputs} #FIXME need to remove pad tokens + irrelevant computational tokens
+        return {
+            "image": images,
+            "label": text_inputs,
+            "text_target": targets,
+        }  # FIXME need to remove pad tokens + irrelevant computational tokens
 
     def train_step(self, sample: Dict[str, Any]) -> Dict[str, Any]:
         image_input = sample["image"]
         label = sample["label"]
         text_target = sample["text_target"]
         result = {}
-
         image_input = image_input.to(self.device_env.device, non_blocking=True)
         label = label.to(self.device_env.device, non_blocking=True)
         text_target = text_target.to(self.device_env.device, non_blocking=True)
-        
+
         accum_steps = self.cfg.opt.grad_accum_steps
         need_update = (self.interval_batch_idx + 1) % accum_steps == 0
 
@@ -357,5 +425,9 @@ class TaskCrullerFinetuneCORD(TaskTrain):
     def state_dict(self):
         state_dicts = {}
         state_dicts["model"] = self.model.state_dict()
-        state_dicts["tokenizer"] = self.tokenizer.state_dicts() # Needed because of dynamic updates for the tokenizer
+        state_dicts[
+            "tokenizer"
+        ] = (
+            self.tokenizer.state_dict()
+        )  # Needed because of dynamic updates for the tokenizer
         return state_dicts

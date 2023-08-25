@@ -53,6 +53,7 @@ python -m pixparse.app.eval \
   --model-name cruller_large_6layers \
   --task.dtype bfloat16 \
   --s3-bucket pixparse-exps \
+  --resume True 
   --eval.checkpoint-path 20230629-231529-model_cruller_large-lr_0.0003-b_12/checkpoints/checkpoint-29.pt \
   --output-dir /fsx/pablo/
 ```
@@ -104,6 +105,38 @@ python -m pixparse.app.eval \
   --eval.checkpoint-path "/fsx/pablo/training_pixparse/20230823-151033-task_cruller_finetune_rvlcdip-model_cruller_base-lr_1.0e-04-b_32/checkpoint-4.pt" \
 ```
 This will write the accuracy metrics in metrics_finetune directory.
+
+
+To finetune a model on CORD dataset:
+
+```bash
+python -m pixparse.app.train \
+  --task-name cruller_finetune_cord \
+  --data.train.source naver-clova-ix/cord-v2 \
+  --data.train.format hf_dataset \
+  --data.train.split train \
+  --data.train.batch-size 32 \
+  --data.train.num-samples 800 \
+  --data.train.num-workers 8 \
+  --model-name cruller_base \
+  --task.opt.clip-grad-value 1.0 \
+  --task.opt.clip-grad-mode norm \
+  --task.opt.learning-rate 3e-4 \
+  --task.opt.grad-accum-steps 1 \
+  --task.opt.betas 0.9 0.99 \
+  --task.opt.layer-decay 0.75 \
+  --task.dtype bfloat16 \
+  --task.num-intervals 30 \
+  --task.num-warmup-intervals 3 \
+  --train.resume True \
+  --train.checkpoint-path /fsx/pablo/training_pixparse/cruller_Aug11th_base_30/checkpoint-8.pt \
+  --train.output-checkpoint-dir /fsx/pablo/training_pixparse/ \
+  --train.output-dir /fsx/pablo/training_pixparse/outputs/ \
+  --train.tensorboard True \
+  --train.log-eval-data False \
+  --train.wandb False \
+  --train.log-filename out.log
+```
 ## Updates
 
 2023-06-14
