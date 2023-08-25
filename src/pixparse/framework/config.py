@@ -18,6 +18,7 @@ class OptimizationCfg:
     grad_accum_steps: int = 1
     momentum: Optional[float] = None
     betas: Optional[Tuple[float, float]] = None
+    layer_decay: Optional[float] = None
 
 
 @dataclass

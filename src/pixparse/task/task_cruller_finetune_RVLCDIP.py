@@ -240,6 +240,7 @@ class TaskCrullerFinetuneRVLCDIP(TaskTrain):
             self.cfg.opt.optimizer,
             lr=self.cfg.opt.learning_rate,
             eps=self.cfg.opt.eps,
+            layer_decay=self.cfg.opt.layer_decay,
             **opt_kwargs,
         )
 

@@ -184,7 +184,7 @@ class TaskCrullerFinetuneXent(TaskTrain):
             self.cfg.opt.optimizer,
             lr=self.cfg.opt.learning_rate,
             eps=self.cfg.opt.eps,
-            layer_decay=0.1,
+            layer_decay=self.cfg.opt.layer_decay,
             **opt_kwargs,
         )
         
