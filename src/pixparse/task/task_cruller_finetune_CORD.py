@@ -5,7 +5,10 @@ from functools import partial
 from typing import Optional, List, Any
 
 import torch
+from torch.utils.data import DataLoader
 import torch.nn as nn
+import torch.nn.functional as F
+
 import torchvision.transforms as transforms
 from torchvision.transforms import functional as transformsF
 import timm
@@ -26,6 +29,9 @@ from collections import OrderedDict
 from pixparse.utils.json_utils import json2token
 
 from ast import literal_eval
+
+from datasets import load_dataset
+from pixparse.utils.json_utils import json2token, token2json
 
 _logger = logging.getLogger(__name__)
 
@@ -59,6 +65,29 @@ class TaskCrullerFinetuneCORDCfg(TaskTrainCfg):
         else:
             self.model_name = "custom"
 
+def prepare_inputs_for_inference(
+    model,
+    tokenizer,
+    input_ids: torch.Tensor,
+    encoder_outputs: torch.Tensor,
+    past_key_values=None,
+    past=None,
+    use_cache: bool = None,
+    attention_mask: torch.Tensor = None,
+):
+    if past is not None:
+        past_key_values = past
+    attention_mask = input_ids.ne(tokenizer.trunk.pad_token_id).long()
+    if past_key_values is not None:
+        input_ids = input_ids[:, -1:]
+    output = {
+        "input_ids": input_ids,
+        "attention_mask": attention_mask,
+        "past_key_values": past_key_values,
+        "use_cache": use_cache,
+        "encoder_hidden_states": encoder_outputs,  # .last_hidden_state,
+    }
+    return output
 
 class TaskCrullerFinetuneCORD(TaskTrain):
     def __init__(
@@ -191,6 +220,7 @@ class TaskCrullerFinetuneCORD(TaskTrain):
             if cfg.model.image_encoder.image_fmt == "L"
             else img_mean
         )
+
         self.img_std = (
             sum(img_std) / len(img_std)
             if cfg.model.image_encoder.image_fmt == "L"
@@ -203,6 +233,8 @@ class TaskCrullerFinetuneCORD(TaskTrain):
             [
                 transforms.ToTensor(),
                 transforms.Grayscale(),
+                #transforms.RandomResizedCrop(448),
+                #transforms.RandomHorizontalFlip(),
                 transforms.Resize(
                     cfg.model.image_encoder.image_size,
                     interpolation=transforms.InterpolationMode.BICUBIC,
@@ -332,8 +364,9 @@ class TaskCrullerFinetuneCORD(TaskTrain):
             tokens_from_json, _ = json2token(text, self.tokenizer.trunk.all_special_tokens)
             inputs_to_stack.append(tokenizer_fn(
                 self.task_start_token
-                + self.tokenizer.trunk.bos_token
+                #+ self.tokenizer.trunk.bos_token
                 + tokens_from_json
+                + self.tokenizer.trunk.eos_token
             ))
         text_inputs = torch.stack(
             inputs_to_stack
@@ -342,6 +375,8 @@ class TaskCrullerFinetuneCORD(TaskTrain):
 
         transform = self.image_preprocess_train
         images = torch.stack([transform(img) for img in images])
+        text_inputs = text_inputs[:, :-1]
+        targets = targets[:, 1:]
         return {
             "image": images,
             "label": text_inputs,
@@ -364,10 +399,14 @@ class TaskCrullerFinetuneCORD(TaskTrain):
             with self.autocast():
                 output = self.model(image_input, label)
                 logits = output["logits"]
+                breakpoint()
+                #print(logits.shape, text_target.shape)
+                
                 loss = self.loss(
                     logits.view(-1, self.vocab_size),
                     text_target.view(-1),
                 )
+                #print(loss.item())
             if accum_steps > 1:
                 loss /= accum_steps
             return loss
@@ -400,10 +439,73 @@ class TaskCrullerFinetuneCORD(TaskTrain):
         else:
             loss = _forward()
             _backward(loss)
-
         self.batch_idx += 1
         self.interval_batch_idx += 1
-        if self.step % self.eval_frequency == 0:
+        if self.step % 100 == 0:
+            #breakpoint()
+            self.model.eval()
+            # ------------------------------------------------------------------------
+
+            ## EVAL LOOP ON TRAIN
+            dataset_test = load_dataset("naver-clova-ix/cord-v2")
+            loader_ = DataLoader(
+                dataset_test["train"],
+                batch_size=1,
+                num_workers=0,
+                collate_fn=self.collate_fn,
+            )
+
+
+
+
+            generated_labels = []
+            ground_truth_labels = []
+            for i, batch in enumerate(loader_):
+                if i > 10:
+                    break
+                decoded_gt = self.tokenizer.trunk.decode(batch['label'][0])
+                ground_truth = token2json(decoded_gt)
+                ground_truth_labels.append(ground_truth)
+
+                with torch.inference_mode():
+                    if isinstance(self.model, torch.nn.parallel.DistributedDataParallel):
+                        inf_model = self.model.module
+                    else:
+                        inf_model = self.model
+                    tensor_image = batch["image"][0].unsqueeze(0).to(self.device_env.device)  # Adding an extra dimension for batch
+                    output = inf_model.image_encoder(tensor_image)
+                    
+                    current_string = "<s_cord>"
+
+                    input_ids = torch.tensor(self.tokenizer.trunk.encode("<s_cord>")[1:]).unsqueeze(0).to(self.device_env.device)   # Adding extra dimension for batch
+                    max_steps = 20  # maximum number of steps
+
+                    for step in range(max_steps):
+                        inputs = prepare_inputs_for_inference(
+                            inf_model.text_decoder, self.tokenizer, input_ids=input_ids, encoder_outputs=output)
+                        #print(inputs['input_ids'])
+                        
+                        decoder_outputs = inf_model.text_decoder(**inputs)
+                        
+                        probabilities = F.softmax(decoder_outputs['logits'], dim=-1)
+                        next_token_id = torch.argmax(probabilities[0, -1]).item()  # Just get the last token for the single sample
+                        
+                        next_token = self.tokenizer.trunk.decode([next_token_id])
+                        current_string += next_token
+
+                        if next_token == "</s>":
+                            generated_label = current_string.replace("<s_cord>", "").replace("</s>", "").replace("<s>", "").strip()
+                            generated_labels.append(generated_label)
+                            break
+                        
+                        input_ids = torch.tensor(self.tokenizer.trunk.encode(current_string)[1:]).unsqueeze(0).to(self.device_env.device)
+                    print(current_string, decoded_gt)
+            self.model.train()
+
+
+
+
+
             self.monitor.log_step(
                 "finetune",
                 step_idx=self.step,
