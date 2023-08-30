@@ -198,6 +198,7 @@ class TaskCrullerFinetuneCORD(TaskTrain):
             prompt_end_token=self.prompt_end_token,
         )
 
+        
         self.model = Cruller(cfg.model)  # FIXME would be good to defer weight init here
 
         # We need to resize the token embeddings after the model has been initialized
@@ -289,6 +290,7 @@ class TaskCrullerFinetuneCORD(TaskTrain):
             opt_kwargs["betas"] = self.cfg.opt.betas
         if self.cfg.opt.momentum is not None:
             opt_kwargs["momentum"] = self.cfg.opt.momentum
+
         self.optimizer = create_optimizer_v2(
             self.model,
             self.cfg.opt.optimizer,
@@ -297,6 +299,7 @@ class TaskCrullerFinetuneCORD(TaskTrain):
             layer_decay=self.cfg.opt.layer_decay,
             **opt_kwargs,
         )
+        #self.optimizer = torch.optim.Adam(self.model.parameters(), lr = self.cfg.opt.learning_rate)
 
         if self.cfg.amp:
             self.scaler = timm.utils.NativeScaler()
@@ -399,7 +402,6 @@ class TaskCrullerFinetuneCORD(TaskTrain):
             with self.autocast():
                 output = self.model(image_input, label)
                 logits = output["logits"]
-                breakpoint()
                 #print(logits.shape, text_target.shape)
                 
                 loss = self.loss(
@@ -499,7 +501,8 @@ class TaskCrullerFinetuneCORD(TaskTrain):
                             break
                         
                         input_ids = torch.tensor(self.tokenizer.trunk.encode(current_string)[1:]).unsqueeze(0).to(self.device_env.device)
-                    print(current_string, decoded_gt)
+                    #print("pred   --  ", current_string[0:120])
+                    #print("gt     --  ", decoded_gt[0:120])
             self.model.train()
 
 
