@@ -19,14 +19,14 @@ from pixparse.task import (
     TaskDonutEvalOCRCfg,
     TaskCrullerEvalRVLCDIP,
     TaskCrullerEvalRVLCDIPCfg,
+    TaskCrullerEvalCORD,
+    TaskCrullerEvalCORDCfg,
     TaskCrullerPretrain,
     TaskCrullerPretrainCfg,
     TaskCrullerFinetuneRVLCDIP,
     TaskCrullerFinetuneRVLCDIPCfg,
     TaskCrullerFinetuneCORD,
     TaskCrullerFinetuneCORDCfg,
-#    TaskCrullerFinetuneTrainTicket,
-#    TaskCrullerFinetuneTrainTicketCfg,
     TaskCrullerFinetuneXent,
     TaskCrullerFinetuneXentCfg,
 )
@@ -46,6 +46,7 @@ class TaskFactory:
     TASK_CLASS_REGISTRY = {
         "cruller_eval_ocr": (TaskCrullerEvalOCR, TaskCrullerEvalOCRCfg),
         "cruller_eval_rvlcdip": (TaskCrullerEvalRVLCDIP, TaskCrullerEvalRVLCDIPCfg),
+        "cruller_eval_cord": (TaskCrullerEvalCORD, TaskCrullerEvalCORDCfg),
         "donut_eval_ocr": (TaskDonutEvalOCR, TaskDonutEvalOCRCfg),
         "cruller_pretrain": (TaskCrullerPretrain, TaskCrullerPretrainCfg),
         "cruller_finetune_rvlcdip": (
