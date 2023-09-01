@@ -109,24 +109,27 @@ def get_ocr_metrics(
 def get_cer_wer_metrics(
     cer_transforms,
     wer_transforms,
-    ocr_pretraining_metrics,
+    ocr_pretraining_metrics: dict,
     ocr_predictions,
     decoded_texts,
 ):
-    wer_output = wer(
-        reference=decoded_texts,
-        hypothesis=ocr_predictions,
-        reference_transform=wer_transforms,
-        hypothesis_transform=wer_transforms,
-    )
-    ocr_pretraining_metrics["wer"] = wer_output
-    cer_output = cer(
-        reference=decoded_texts,
-        hypothesis=ocr_predictions,
-        reference_transform=cer_transforms,
-        hypothesis_transform=cer_transforms,
-    )
-    ocr_pretraining_metrics["cer"] = cer_output
+    try: 
+        wer_output = wer(
+            reference=decoded_texts,
+            hypothesis=ocr_predictions,
+            reference_transform=wer_transforms,
+            hypothesis_transform=wer_transforms,
+        )
+        ocr_pretraining_metrics["wer"] = wer_output
+        cer_output = cer(
+            reference=decoded_texts,
+            hypothesis=ocr_predictions,
+            reference_transform=cer_transforms,
+            hypothesis_transform=cer_transforms,
+        )
+        ocr_pretraining_metrics["cer"] = cer_output
+    except Exception as e:
+        print(f'Encountered exception {e} when computing wer/cer metrics. Length of ground truth texts is {len(decoded_texts)}, length of generated texts is {len(ocr_predictions)}.')
     return ocr_pretraining_metrics
 
 

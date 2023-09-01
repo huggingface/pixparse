@@ -17,24 +17,23 @@ from pixparse.framework import TaskTrainCfg, TaskTrain, DeviceEnv, Monitor
 from pixparse.models import Cruller, ModelCfg, get_model_config
 from pixparse.tokenizers import TokenizerHF, TokenizerCfg
 from pixparse.data import preprocess_ocr_anno, preprocess_text_anno
-from pixparse.utils.ocr_utils import get_ocr_metrics
+from timm.layers import SelectAdaptivePool2d
 
+from typing import Dict, List
 
+from collections import OrderedDict
 
 _logger = logging.getLogger(__name__)
 
-# FIXME structure of config tree
-# pull together model + prec + opt in a Task config that is then in the train cfg?
-# or flatten model/prec/opt to train?
-
-
+class GetCLSToken(nn.Module):
+    def forward(self, x):
+        return x[:, 0, :]
+            
 @dataclass
-class TaskCrullerPretrainCfg(TaskTrainCfg):
+class TaskCrullerFinetuneXentCfg(TaskTrainCfg):
     model_name: Optional[str] = None  # if model_name set, loads a pre-defined config in models/configs
     model: ModelCfg = field(default_factory=ModelCfg)  # FIXME rename model_cfg to diff from model_name?
     tokenizer: TokenizerCfg = field(default_factory=TokenizerCfg)
-
-  
     def __post_init__(self):
         # FIXME figure out how to get command line args to overlay on top pre-defined
         # config but ONLY if they are specified on cmd line?
@@ -47,22 +46,10 @@ class TaskCrullerPretrainCfg(TaskTrainCfg):
         else:
             self.model_name = 'custom'
 
-class TaskCrullerPretrain(TaskTrain):
-    """ Cruller Pretraining Task
-
-    NOTES:
-      * all task code is currently here w/ nothing in base class but interface
-      * we will want to pull out bits that are common to other tasks as we proceed
-         by pushing into base classe(s), stand-alone fn / helper classes, etc.
-      * to setup schedule we need info from data-pipeline re samples, etc so our call sequence is:
-        * Task() -- task __init__() called for instance, setup what we can
-        * Initialize data-pipeline (external to Task) to get batch / step count
-        * Call train_setup() to pass this info back to Task and finish setting up optimizer / scheduler
-        * Proceed to train by interval_start()/train_step() * N/interval_end(), eval_step(), etc
-    """
+class TaskCrullerFinetuneXent(TaskTrain):
     def __init__(
             self,
-            cfg: TaskCrullerPretrainCfg,
+            cfg: TaskCrullerFinetuneXentCfg,
             device_env: DeviceEnv,
             monitor: Monitor = None,
     ):
@@ -79,11 +66,14 @@ class TaskCrullerPretrain(TaskTrain):
         if cfg.dtype is not None:
             self.amp_dtype = torch.bfloat16 if cfg.dtype in ('bfloat16', 'bf16') else torch.float16
 
-        self.task_start_token = '<s_pretrain>'
+        self.task_start_token = '<s_finetune>'
         self.prompt_end_token = self.task_start_token
         self.max_position_embeddings = cfg.model.text_decoder.max_length
         self.text_anno_fn = False  # set for image-text dataset experiments
         self.tokenizer = TokenizerHF(cfg.tokenizer)
+
+        self.state_dict = OrderedDict()
+        self.resume = False
         
         # Setup task specific tokens
         # NOTE: Donut appears to add tokens on the fly during dataset init, requires iterating
@@ -141,43 +131,34 @@ class TaskCrullerPretrain(TaskTrain):
                 std=self.img_std,
             )
         ])
-        self.image_preprocess_eval = None
+        
 
-        # TODO These metrics have to be organized as dicts of dicts. 
-        # First level is the category, second level is the tag
-        # We have to make this clear
-        self.train_metrics = {} 
-        self.eval_metrics = {}
-        self.max_recursion_length = 1000 #specific to Cruller for generation
+        # "pool" results and setup classification head
+        
 
+    def train_setup(self, num_batches_per_interval: int):
+        # Load model
 
-
-    def train_setup(
-            self,
-            num_batches_per_interval: int,
-    ):
-        """
-        FIXME this interface needs refinement
-        * currently, training duration is 'interval' based, where interval is either full dataset epoch, or
-            sampled with replacement periods, intervals correspond to checkpoint / eval periods
-        * LR schedule is updated per-step, so num_steps_per_interval is required to translate intervals ->
-            total steps for scheduling
-        * future should allow for step based durations (keeping interval as option), where train and warmup
-            durations are specified in steps, checkpoint intervals in steps or time
-
-        Args:
-            num_batches_per_interval:
-
-        Returns:
-
-        """
-        # FIXME currently thinking moving to device, setup DDP / FSDP makes sense
-        # in setup here vs in __init__(). For __init__ need the model structure to
-        # instantiate / setup tokenizer, other aspects. I don't think we need to init
+        # First load base model, then specialize it to fine-tuning end
+        
+        # FIXME pass along resume arg here
+        if self.resume:
+            _logger.info(f"Resuming from existing checkpoint. ")
+            self.state_dict = {k.replace("module.", ""): v for k, v in self.state_dict.items()}
+            self.model.load_state_dict(self.state_dict)
+        
+        self.model = nn.Sequential(
+                    OrderedDict(
+                        [("encoder", self.model.image_encoder),
+                          ("token_pool", GetCLSToken()),
+                          ("final_fc", nn.Linear(768, 16)), # 16 classes in RVLCDIP
+                          #nn.Softmax(16)
+                        ]))
         # weights / move to device until here.
         device = self.device_env.device
+        print(f"Local rank for this process: {self.device_env.local_rank}")
+        device = torch.device(f"cuda:{self.device_env.local_rank}")
         self.model.to(device)
-
         if self.device_env.world_size > 1:
             # NOTE: the plan is to add option for FSDP w/ HYBRID_SHARD strategy to extend
             # model size capacity beyond DDP w/o overloading HF cluster NCCL throughput.
@@ -193,6 +174,11 @@ class TaskCrullerPretrain(TaskTrain):
             opt_kwargs['betas'] = self.cfg.opt.betas
         if self.cfg.opt.momentum is not None:
             opt_kwargs['momentum'] = self.cfg.opt.momentum
+
+        
+        
+        # standard opt
+
         self.optimizer = create_optimizer_v2(
             self.model,
             self.cfg.opt.optimizer,
@@ -201,6 +187,11 @@ class TaskCrullerPretrain(TaskTrain):
             layer_decay=self.cfg.opt.layer_decay,
             **opt_kwargs,
         )
+        
+
+        #  only classifier
+
+        #self.optimizer = torch.optim.AdamW([p for n, p in self.model.named_parameters() if "final_fc" in n], lr=self.cfg.opt.learning_rate)
 
         if self.cfg.amp:
             self.scaler = timm.utils.NativeScaler()
@@ -223,34 +214,46 @@ class TaskCrullerPretrain(TaskTrain):
         )
         self.scheduler.step_update(0)
 
+
+    def collate_fn(self, batch):
+        """
+        basic collator for PIL images, as returned by rvlcdip dataloader (among others)
+        """
+        images = [item['image'] for item in batch]
+        labels = [item['label'] for item in batch]
+        
+        transform = self.image_preprocess_train
+        
+        images = torch.stack([transform(img) for img in images])
+        labels = torch.tensor(labels, dtype=torch.int64)
+        return {'image': images, 'label': labels}
+
+
     def train_interval_start(self):
-        # epoch / interval start hook, useful?
         self.optimizer.zero_grad()
         self.interval_batch_idx = 0
 
     def train_interval_end(self):
-        # epoch / interval end hook, useful?
-        self.monitor.log_phase('train', self.interval_idx)
+        self.monitor.log_phase('finetune', self.interval_idx)
         self.interval_idx += 1
 
-    def train_step(self, sample):
-        image_input, text_input, text_target = sample
+    def train_step(self, sample: Dict[str, Any]) -> Dict[str, Any]:
+        image_input = sample['image']
+        label = sample['label']
         result = {}
 
         image_input = image_input.to(self.device_env.device, non_blocking=True)
-        text_input = text_input[:, :-1].to(self.device_env.device, non_blocking=True)
-        text_target = text_target[:, 1:].to(self.device_env.device, non_blocking=True)
+        label = label.to(self.device_env.device, non_blocking=True)
 
         accum_steps = self.cfg.opt.grad_accum_steps
         need_update = (self.interval_batch_idx + 1) % accum_steps == 0
 
         def _forward():
             with self.autocast():
-                output = self.model(image_input, text_input)
-                logits = output['logits']
+                outputs = self.model(image_input)
                 loss = self.loss(
-                    logits.view(-1, self.vocab_size),
-                    text_target.view(-1),
+                    outputs,
+                    label,
                 )
             if accum_steps > 1:
                 loss /= accum_steps
@@ -277,6 +280,7 @@ class TaskCrullerPretrain(TaskTrain):
                         )
                     self.optimizer.step()
 
+    
         if self.has_no_sync and not need_update:
             with self.model.no_sync():
                 loss = _forward()
@@ -285,8 +289,21 @@ class TaskCrullerPretrain(TaskTrain):
             loss = _forward()
             _backward(loss)
 
+
         self.batch_idx += 1
         self.interval_batch_idx += 1
+        if self.step % self.eval_frequency == 0:
+            self.monitor.log_step(
+                'finetune',
+                step_idx=self.step,
+                step_end_idx=self.num_intervals * self.num_steps_per_interval,
+                interval=self.interval_idx,
+                loss=loss.item(),
+                lr=self.get_current_lr(),
+                metrics=None,
+                eval_data=None
+            )
+
         if not need_update:
             return result
 
@@ -294,98 +311,11 @@ class TaskCrullerPretrain(TaskTrain):
         self.scheduler.step_update(self.step)
         self.optimizer.zero_grad()
 
-        if self.step % self.eval_frequency == 0:
-            metrics, eval_gallery = self.get_train_ocr_metrics(sample) 
-
-            self.train_metrics |= metrics
-
-            self.monitor.log_step(
-                'train',
-                step_idx=self.step,
-                step_end_idx=self.num_intervals * self.num_steps_per_interval,
-                interval=self.interval_idx,
-                loss=loss.item(),
-                lr=self.get_current_lr(),
-                metrics=self.train_metrics,
-                eval_data=eval_gallery
-            )
-
-        return result
-    
-
-    def get_train_ocr_metrics(self, sample):
-        """
-        In cruller_pretrain, this task returns some utils logs useful to monitor training.
-        Typically we want to return a few samples of images 
-        and their generated OCR so that we can log them onto a tensorboard gallery in
-        the log_step
-        """
-        metrics = {}
-        eval_data = {}
-        image_input, text_input, text_target = sample
-
-        image_input = image_input.to(self.device_env.device, non_blocking=True)
-        text_input = text_input[:, :-1].to(self.device_env.device, non_blocking=True)
-        text_target = text_target[:, 1:].to(self.device_env.device, non_blocking=True)
-
-        """
-        metrics = {}
-        image_input, text_input, text_target = sample
-        text_input = [item[0] for item in text_input]
-        text_input = torch.stack(text_input, dim=0).to(self.device_env.device, non_blocking=True)
-        text_target = [item[0] for item in text_target]
-        text_target = torch.stack(text_target, dim=0).to(self.device_env.device, non_blocking=True)
-        image_input = image_input.to(self.device_env.device, non_blocking=True)
-
-        # Add OCR-related metrics and generation
-
-        ocr_metrics, _ = get_ocr_metrics(
-            model=self.model,
-            tokenizer=self.tokenizer,
-            image_input=image_input,
-            text_input=text_target,
-            device_env=self.device_env,
-            max_recursion_length=self.max_recursion_length,
-        )"""
-
-        # Add OCR-related metrics and generation
-
-        ocr_metrics, ocr_reconstructed_sample = get_ocr_metrics(
-            model=self.model,
-            tokenizer=self.tokenizer,
-            image_input=image_input,
-            text_input=text_target,
-            device_env=self.device_env,
-            max_recursion_length=self.max_recursion_length
-            )
-        if ocr_metrics and ocr_reconstructed_sample:
-            metrics['ocr_reconstruction'] = ocr_metrics
-            eval_data['ocr_reconstruction_data'] = ocr_reconstructed_sample
-        else:
-            _logger.info("Can't generate text from current batch. Skipping metrics...")
-        
-        # TODO Add other metrics relevant for eval step
-        # 
-        # metrics['metric_category'] = ... 
-        return metrics, eval_data
-
-    def state_dict(self):
-        state_dicts = {}
-        state_dicts['model'] = self.model.state_dict()
-        state_dicts['optimizer'] = self.optimizer.state_dict()
-        if hasattr(self.scheduler, 'state_dict'):
-            state_dicts['scheduler'] = self.scheduler.state_dict()
-        if self.scaler is not None:
-            state_dicts['scaler'] = self.scaler.state_dict()
-        return state_dicts
-
-    def load_state_dict(self, state_dict):
+    def eval_step(self, sample: Dict[str, Any]) -> Dict[str, Any]:
+        # TODO Remove eval method from train dataclass?
         pass
 
-    def __repr__(self):
-        outputs = [
-            f'model: {repr(self.model)}',
-            f'opt: {repr(self.optimizer)}',
-            f'sched: {repr(self.scheduler)}',
-        ]
-        return '\n'.join(outputs)
+    def get_current_lr(self):
+        lrl = [param_group['lr'] for param_group in self.optimizer.param_groups]
+        lr = sum(lrl) / len(lrl)
+        return lr

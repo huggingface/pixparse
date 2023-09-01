@@ -109,10 +109,6 @@ class TaskCrullerEvalOCR(TaskEval):
                 len(self.tokenizer.trunk)
             )
 
-        self.model.load_state_dict(cfg.model_state_dict)
-
-        self.model.eval()
-
         self.has_no_sync = False
         self.num_image_chs = 1 if cfg.model.image_encoder.image_fmt == "L" else 3
 
@@ -173,7 +169,13 @@ class TaskCrullerEvalOCR(TaskEval):
         return wrapper
 
     def setup(self):
+        """
+        Weight initialization is deferred here. The state_dict to be loaded has to be created before, within the task.
+        """
         device = self.device_env.device
+        self.model.load_state_dict(self.resume_state_dict)
+
+        self.model.eval()
         self.model.to(device)
 
     def prepare_for_evaluation(

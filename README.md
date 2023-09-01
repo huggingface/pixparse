@@ -13,10 +13,11 @@ The training objectives and pretraining datasets will also be inspired by the as
 
 ## Usage
 
-To launch a training Cruller Task on IDL data, you would need these arguments in these scopes.
+To launch a pretraining Cruller Task on IDL data, you would need these arguments in these scopes. The task-name argument selects which task is to be run, in this case cruller_pretrain. 
 
 ```bash
 python -m pixparse.app.train \
+  --task-name cruller_pretrain \
   --data.train.source "pipe:aws s3 cp s3://url-to-IDL-webdataset-shards/idl_shard-00{000..699}.tar -" \
   --data.train.batch-size 8 \
   --data.train.num-samples 800000 \
@@ -40,10 +41,11 @@ python -m pixparse.app.train \
 
 ```
 
-To launch evaluation on existing checkpoints, you need to use a Cruller Eval Task, e.g. on FUNSD dataset:
+To launch evaluation on existing checkpoints, you need to use a Cruller Eval Task, e.g. on FUNSD dataset. The task-name argument will select which task is to be run. donut_eval_ocr, for instance, runs Donut as an OCR engine on the dataset chosen and does not need external checkpoints.
 
 ```bash
 python -m pixparse.app.eval \
+  --eval.task-name cruller_eval_ocr \
   --data.eval.source "pipe:aws s3 cp s3://.../FUNSD/FUNSD-000000.tar -" \
   --data.eval.num-samples 200 \
   --data.eval.batch-size 16 \
@@ -51,12 +53,108 @@ python -m pixparse.app.eval \
   --model-name cruller_large_6layers \
   --task.dtype bfloat16 \
   --s3-bucket pixparse-exps \
+  --resume True 
   --eval.checkpoint-path 20230629-231529-model_cruller_large-lr_0.0003-b_12/checkpoints/checkpoint-29.pt \
   --output-dir /fsx/pablo/
 ```
 
 metrics will be saved under output_dir, with a name derived from the checkpoint used. 
 
+To finetune a pretrained pixparse model on RVLCDIP json completion: 
+```bash
+python -m pixparse.app.train \
+  --task-name cruller_finetune_rvlcdip \
+  --data.train.source aharley/rvl_cdip \
+  --data.train.format hf_dataset \
+  --data.train.split train \
+  --data.train.batch-size 32 \
+  --data.train.num-samples 320000 \
+  --data.train.num-workers 8 \
+  --model-name cruller_base \
+  --task.opt.clip-grad-value 1.0 \
+  --task.opt.clip-grad-mode norm \
+  --task.opt.learning-rate 1e-4 \
+  --task.opt.grad-accum-steps 1 \
+  --task.opt.betas 0.9 0.99 \
+  --task.dtype bfloat16 \
+  --task.num-intervals  \
+  --task.num-warmup-intervals 1 \
+  --train.resume True \
+  --train.checkpoint-path /fsx/pablo/training_pixparse/cruller_Aug11th_base_30/checkpoint-8.pt \
+  --train.output-checkpoint-dir /fsx/pablo/training_pixparse/ \
+  --train.output-dir /fsx/pablo/training_pixparse/outputs/ \
+  --train.tensorboard True \
+  --train.log-eval-data False \
+  --train.wandb False \
+  --train.log-filename out.log
+```
+To evaluate a model finetuned on RVLCDIP:
+
+```bash
+python -m pixparse.app.eval \
+  --task-name cruller_eval_rvlcdip \
+  --data.eval.source aharley/rvl_cdip \
+  --data.eval.format hf_dataset \
+  --data.eval.split test \
+  --data.eval.num-samples 40000 \
+  --data.eval.batch-size 16 \
+  --data.eval.num-workers 8 \
+  --model-name cruller_base \
+  --task.dtype bfloat16 \
+  --output-dir /fsx/pablo/metrics_finetune \
+  --eval.checkpoint-path "/fsx/pablo/training_pixparse/20230823-151033-task_cruller_finetune_rvlcdip-model_cruller_base-lr_1.0e-04-b_32/checkpoint-4.pt" \
+```
+This will write the accuracy metrics in metrics_finetune directory.
+
+
+To finetune a model on CORD dataset:
+
+```bash
+python -m pixparse.app.train \
+  --task-name cruller_finetune_cord \
+  --data.train.source naver-clova-ix/cord-v2 \
+  --data.train.format hf_dataset \
+  --data.train.split train \
+  --data.train.batch-size 32 \
+  --data.train.num-samples 800 \
+  --data.train.num-workers 8 \
+  --model-name cruller_base \
+  --task.opt.clip-grad-value 1.0 \
+  --task.opt.clip-grad-mode norm \
+  --task.opt.learning-rate 3e-4 \
+  --task.opt.grad-accum-steps 1 \
+  --task.opt.betas 0.9 0.99 \
+  --task.opt.layer-decay 0.75 \
+  --task.dtype bfloat16 \
+  --task.num-intervals 30 \
+  --task.num-warmup-intervals 3 \
+  --train.resume True \
+  --train.checkpoint-path /fsx/pablo/training_pixparse/cruller_Aug11th_base_30/checkpoint-8.pt \
+  --train.output-checkpoint-dir /fsx/pablo/training_pixparse/ \
+  --train.output-dir /fsx/pablo/training_pixparse/outputs/ \
+  --train.tensorboard True \
+  --train.log-eval-data False \
+  --train.wandb False \
+  --train.log-filename out.log
+```
+
+To evaluate a model on CORD dataset:
+
+```bash
+python -m pixparse.app.eval \
+  --task-name cruller_eval_cord \
+  --data.eval.source naver-clova-ix/cord-v2 \
+  --data.eval.format hf_dataset \
+  --data.eval.split test \
+  --data.eval.num-samples 100 \
+  --data.eval.batch-size 16 \
+  --data.eval.num-workers 8 \
+  --model-name cruller_base \
+  --task.dtype bfloat16 \
+  --output-dir /fsx/pablo/metrics_finetune \
+  --eval.checkpoint-path /fsx/pablo/training_pixparse/20230830-133114-task_cruller_finetune_cord-model_cruller_base-lr_3.0e-05-b_8/checkpoint-29.pt \
+
+```
 ## Updates
 
 2023-06-14

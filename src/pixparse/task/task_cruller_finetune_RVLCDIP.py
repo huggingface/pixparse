@@ -17,54 +17,51 @@ from pixparse.framework import TaskTrainCfg, TaskTrain, DeviceEnv, Monitor
 from pixparse.models import Cruller, ModelCfg, get_model_config
 from pixparse.tokenizers import TokenizerHF, TokenizerCfg
 from pixparse.data import preprocess_ocr_anno, preprocess_text_anno
-from pixparse.utils.ocr_utils import get_ocr_metrics
+from timm.layers import SelectAdaptivePool2d
 
+from typing import Dict, List
 
+from collections import OrderedDict
 
 _logger = logging.getLogger(__name__)
 
-# FIXME structure of config tree
-# pull together model + prec + opt in a Task config that is then in the train cfg?
-# or flatten model/prec/opt to train?
+
+class GetCLSToken(nn.Module):
+    def forward(self, x):
+        return x[:, 0, :]
 
 
 @dataclass
-class TaskCrullerPretrainCfg(TaskTrainCfg):
-    model_name: Optional[str] = None  # if model_name set, loads a pre-defined config in models/configs
-    model: ModelCfg = field(default_factory=ModelCfg)  # FIXME rename model_cfg to diff from model_name?
+class TaskCrullerFinetuneRVLCDIPCfg(TaskTrainCfg):
+    model_name: Optional[
+        str
+    ] = None  # if model_name set, loads a pre-defined config in models/configs
+    model: ModelCfg = field(
+        default_factory=ModelCfg
+    )  # FIXME rename model_cfg to diff from model_name?
     tokenizer: TokenizerCfg = field(default_factory=TokenizerCfg)
 
-  
     def __post_init__(self):
         # FIXME figure out how to get command line args to overlay on top pre-defined
         # config but ONLY if they are specified on cmd line?
         if self.model_name:
             model = get_model_config(self.model_name)
             if model is None:
-                _logger.warning(f'Model config for {self.model_name} was not found, using defaults.')
+                _logger.warning(
+                    f"Model config for {self.model_name} was not found, using defaults."
+                )
             else:
                 self.model = model
         else:
-            self.model_name = 'custom'
+            self.model_name = "custom"
 
-class TaskCrullerPretrain(TaskTrain):
-    """ Cruller Pretraining Task
 
-    NOTES:
-      * all task code is currently here w/ nothing in base class but interface
-      * we will want to pull out bits that are common to other tasks as we proceed
-         by pushing into base classe(s), stand-alone fn / helper classes, etc.
-      * to setup schedule we need info from data-pipeline re samples, etc so our call sequence is:
-        * Task() -- task __init__() called for instance, setup what we can
-        * Initialize data-pipeline (external to Task) to get batch / step count
-        * Call train_setup() to pass this info back to Task and finish setting up optimizer / scheduler
-        * Proceed to train by interval_start()/train_step() * N/interval_end(), eval_step(), etc
-    """
+class TaskCrullerFinetuneRVLCDIP(TaskTrain):
     def __init__(
-            self,
-            cfg: TaskCrullerPretrainCfg,
-            device_env: DeviceEnv,
-            monitor: Monitor = None,
+        self,
+        cfg: TaskCrullerFinetuneRVLCDIPCfg,
+        device_env: DeviceEnv,
+        monitor: Monitor = None,
     ):
         super().__init__(
             cfg=cfg,
@@ -77,14 +74,19 @@ class TaskCrullerPretrain(TaskTrain):
         #  amp + dtype, pure float16/bfloat16, custom mixed prec, etc
         self.amp_dtype = None
         if cfg.dtype is not None:
-            self.amp_dtype = torch.bfloat16 if cfg.dtype in ('bfloat16', 'bf16') else torch.float16
+            self.amp_dtype = (
+                torch.bfloat16 if cfg.dtype in ("bfloat16", "bf16") else torch.float16
+            )
 
-        self.task_start_token = '<s_pretrain>'
+        self.task_start_token = "<s_rvlcdip>"
         self.prompt_end_token = self.task_start_token
         self.max_position_embeddings = cfg.model.text_decoder.max_length
-        self.text_anno_fn = False  # set for image-text dataset experiments
+        self.text_anno_fn = True  # set for image-text dataset experiments
         self.tokenizer = TokenizerHF(cfg.tokenizer)
-        
+
+        self.state_dict = OrderedDict()
+        self.resume = False
+
         # Setup task specific tokens
         # NOTE: Donut appears to add tokens on the fly during dataset init, requires iterating
         # through full dataset on train start due to not being able to update once tokenizers
@@ -93,10 +95,47 @@ class TaskCrullerPretrain(TaskTrain):
             "<sep/>",  # JSON list separator
             self.task_start_token,  # task start (based on dataset/task)
             self.prompt_end_token,  # prompt end (or task_start for pretrain)
+            "<s_class>",  # This and what follows is valid only for RVLCDIP task
+            "</s_class>",
+            "<advertisement/>",
+            "<budget/>",
+            "<email/>",
+            "<file_folder/>",
+            "<form/>",
+            "<handwritten/>",
+            "<invoice/>",
+            "<letter/>",
+            "<memo/>",
+            "<news_article/>",
+            "<presentation/>",
+            "<questionnaire/>",
+            "<resume/>",
+            "<scientific_publication/>",
+            "<scientific_report/>",
+            "<specification/>",
         ]
         newly_added_num = self.tokenizer.trunk.add_special_tokens(
             {"additional_special_tokens": sorted(set(special_tokens))}
         )
+
+        self.int2str = {
+            0: "letter",
+            1: "form",
+            2: "email",
+            3: "handwritten",
+            4: "advertisement",
+            5: "scientific_report",
+            6: "scientific_publication",
+            7: "specification",
+            8: "file_folder",
+            9: "news_article",
+            10: "budget",
+            11: "invoice",
+            12: "presentation",
+            13: "questionnaire",
+            14: "resume",
+            15: "memo",
+        }
 
         self.vocab_size = len(self.tokenizer.trunk)
 
@@ -113,48 +152,51 @@ class TaskCrullerPretrain(TaskTrain):
 
         # We need to resize the token embeddings after the model has been initialized
         if newly_added_num > 0:
-            self.model.text_decoder.trunk.resize_token_embeddings(len(self.tokenizer.trunk))
-        
+            self.model.text_decoder.trunk.resize_token_embeddings(
+                len(self.tokenizer.trunk)
+            )
+
         self.loss = nn.CrossEntropyLoss(ignore_index=-100)
         self.has_no_sync = False
-        self.num_image_chs = 1 if cfg.model.image_encoder.image_fmt == 'L' else 3
-        
+        self.num_image_chs = 1 if cfg.model.image_encoder.image_fmt == "L" else 3
+
         # TODO refactor, used in many tasks
 
-        img_mean = self.model.image_encoder.trunk.pretrained_cfg['mean']
-        img_std = self.model.image_encoder.trunk.pretrained_cfg['std']
-        
-        self.img_mean = sum(img_mean) / len(img_mean) if cfg.model.image_encoder.image_fmt == 'L' else img_mean
-        self.img_std = sum(img_std) / len(img_std) if cfg.model.image_encoder.image_fmt == 'L' else img_std
+        img_mean = self.model.image_encoder.trunk.pretrained_cfg["mean"]
+        img_std = self.model.image_encoder.trunk.pretrained_cfg["std"]
+
+        self.img_mean = (
+            sum(img_mean) / len(img_mean)
+            if cfg.model.image_encoder.image_fmt == "L"
+            else img_mean
+        )
+        self.img_std = (
+            sum(img_std) / len(img_std)
+            if cfg.model.image_encoder.image_fmt == "L"
+            else img_std
+        )
 
         # preprocessors cross both the task/model & dataset domain,
         # created within task here and passed to data loaders
-        self.image_preprocess_train = transforms.Compose([
-            transforms.ToTensor(),
-            transforms.Resize(
-                cfg.model.image_encoder.image_size,
-                interpolation=transforms.InterpolationMode.BICUBIC,
-                antialias=True),
-            #transforms.CenterCrop(448),  # FIXME need better aspect preserving resize & pad
-            transforms.Normalize(
-                mean=self.img_mean,
-                std=self.img_std,
-            )
-        ])
-        self.image_preprocess_eval = None
-
-        # TODO These metrics have to be organized as dicts of dicts. 
-        # First level is the category, second level is the tag
-        # We have to make this clear
-        self.train_metrics = {} 
-        self.eval_metrics = {}
-        self.max_recursion_length = 1000 #specific to Cruller for generation
-
-
+        self.image_preprocess_train = transforms.Compose(
+            [
+                transforms.ToTensor(),
+                transforms.Resize(
+                    cfg.model.image_encoder.image_size,
+                    interpolation=transforms.InterpolationMode.BICUBIC,
+                    antialias=True,
+                ),
+                # transforms.CenterCrop(448),  # FIXME need better aspect preserving resize & pad
+                transforms.Normalize(
+                    mean=self.img_mean,
+                    std=self.img_std,
+                ),
+            ]
+        )
 
     def train_setup(
-            self,
-            num_batches_per_interval: int,
+        self,
+        num_batches_per_interval: int,
     ):
         """
         FIXME this interface needs refinement
@@ -186,13 +228,13 @@ class TaskCrullerPretrain(TaskTrain):
                 device_ids=[device],
                 static_graph=True,
             )
-            self.has_no_sync = hasattr(self.model, 'no_sync')
+            self.has_no_sync = hasattr(self.model, "no_sync")
 
         opt_kwargs = {}
         if self.cfg.opt.betas is not None:
-            opt_kwargs['betas'] = self.cfg.opt.betas
+            opt_kwargs["betas"] = self.cfg.opt.betas
         if self.cfg.opt.momentum is not None:
-            opt_kwargs['momentum'] = self.cfg.opt.momentum
+            opt_kwargs["momentum"] = self.cfg.opt.momentum
         self.optimizer = create_optimizer_v2(
             self.model,
             self.cfg.opt.optimizer,
@@ -204,14 +246,18 @@ class TaskCrullerPretrain(TaskTrain):
 
         if self.cfg.amp:
             self.scaler = timm.utils.NativeScaler()
-            self.autocast = partial(torch.autocast, device_type=device.type, dtype=self.amp_dtype)
+            self.autocast = partial(
+                torch.autocast, device_type=device.type, dtype=self.amp_dtype
+            )
         else:
             self.scaler = None
             self.autocast = nullcontext
 
         # FIXME will need two paths here to support interval vs step based durations
         #  in either case LR is always stepped with each optimizer update (train step)
-        self.num_steps_per_interval = num_batches_per_interval // self.cfg.opt.grad_accum_steps
+        self.num_steps_per_interval = (
+            num_batches_per_interval // self.cfg.opt.grad_accum_steps
+        )
         self.scheduler, num_scheduled_epochs = create_scheduler_v2(
             self.optimizer,
             self.cfg.opt.scheduler,
@@ -223,31 +269,62 @@ class TaskCrullerPretrain(TaskTrain):
         )
         self.scheduler.step_update(0)
 
-    def train_interval_start(self):
-        # epoch / interval start hook, useful?
-        self.optimizer.zero_grad()
-        self.interval_batch_idx = 0
+    def text_input_to_target(self, text_input, ignore_id=-100):
+        target = text_input.clone()
+        # model doesn't need to predict pad token
+        target[target == self.tokenizer.trunk.pad_token_id] = ignore_id
+        # model doesn't need to predict prompt (for VQA)
+        prompt_end_token_id = self.tokenizer.trunk.convert_tokens_to_ids(
+            self.prompt_end_token
+        )
+        target[: torch.nonzero(target == prompt_end_token_id).sum() + 1] = ignore_id
+        return target
 
-    def train_interval_end(self):
-        # epoch / interval end hook, useful?
-        self.monitor.log_phase('train', self.interval_idx)
-        self.interval_idx += 1
+    def collate_fn(self, batch):
+        """
+        basic collator for PIL images, as returned by rvlcdip dataloader (among others)
+        """
+        images = [item["image"] for item in batch]
+        labels = [item["label"] for item in batch]
 
-    def train_step(self, sample):
-        image_input, text_input, text_target = sample
+        tokenizer_fn = lambda x: self.tokenizer.trunk(x, #FIXME move this batcher/tokenizer elsewhere
+            add_special_tokens=False,
+            return_tensors='pt',
+            max_length=5,
+            padding='max_length',
+            truncation=True).input_ids[0]
+
+        labels_tokens = [ 
+            tokenizer_fn(self.task_start_token + "<" + self.int2str[label] + "/>" + self.tokenizer.trunk.eos_token)
+            for label in labels
+        ]
+        transform = self.image_preprocess_train
+
+        images = torch.stack([transform(img) for img in images])
+        labels = torch.stack(labels_tokens)
+        targets = torch.stack([self.text_input_to_target(text) for text in labels])
+
+        labels = labels[:, :-1]
+        targets = targets[:, 1:]
+
+        return {"image": images, "label": labels, "text_target": targets}
+
+    def train_step(self, sample: Dict[str, Any]) -> Dict[str, Any]:
+        image_input = sample["image"]
+        label = sample["label"]
+        text_target = sample["text_target"]
         result = {}
 
         image_input = image_input.to(self.device_env.device, non_blocking=True)
-        text_input = text_input[:, :-1].to(self.device_env.device, non_blocking=True)
-        text_target = text_target[:, 1:].to(self.device_env.device, non_blocking=True)
-
+        label = label.to(self.device_env.device, non_blocking=True)
+        text_target = text_target.to(self.device_env.device, non_blocking=True)
         accum_steps = self.cfg.opt.grad_accum_steps
         need_update = (self.interval_batch_idx + 1) % accum_steps == 0
 
         def _forward():
             with self.autocast():
-                output = self.model(image_input, text_input)
-                logits = output['logits']
+                output = self.model(image_input, label)
+                logits = output["logits"]
                 loss = self.loss(
                     logits.view(-1, self.vocab_size),
                     text_target.view(-1),
@@ -287,105 +364,21 @@ class TaskCrullerPretrain(TaskTrain):
 
         self.batch_idx += 1
         self.interval_batch_idx += 1
+        if self.step % self.eval_frequency == 0:
+            self.monitor.log_step(
+                "finetune",
+                step_idx=self.step,
+                step_end_idx=self.num_intervals * self.num_steps_per_interval,
+                interval=self.interval_idx,
+                loss=loss.item(),
+                lr=self.get_current_lr(),
+                metrics=None,
+                eval_data=None,
+            )
+
         if not need_update:
             return result
 
         self.step += 1
         self.scheduler.step_update(self.step)
         self.optimizer.zero_grad()
-
-        if self.step % self.eval_frequency == 0:
-            metrics, eval_gallery = self.get_train_ocr_metrics(sample) 
-
-            self.train_metrics |= metrics
-
-            self.monitor.log_step(
-                'train',
-                step_idx=self.step,
-                step_end_idx=self.num_intervals * self.num_steps_per_interval,
-                interval=self.interval_idx,
-                loss=loss.item(),
-                lr=self.get_current_lr(),
-                metrics=self.train_metrics,
-                eval_data=eval_gallery
-            )
-
-        return result
-    
-
-    def get_train_ocr_metrics(self, sample):
-        """
-        In cruller_pretrain, this task returns some utils logs useful to monitor training.
-        Typically we want to return a few samples of images 
-        and their generated OCR so that we can log them onto a tensorboard gallery in
-        the log_step
-        """
-        metrics = {}
-        eval_data = {}
-        image_input, text_input, text_target = sample
-
-        image_input = image_input.to(self.device_env.device, non_blocking=True)
-        text_input = text_input[:, :-1].to(self.device_env.device, non_blocking=True)
-        text_target = text_target[:, 1:].to(self.device_env.device, non_blocking=True)
-
-        """
-        metrics = {}
-        image_input, text_input, text_target = sample
-        text_input = [item[0] for item in text_input]
-        text_input = torch.stack(text_input, dim=0).to(self.device_env.device, non_blocking=True)
-        text_target = [item[0] for item in text_target]
-        text_target = torch.stack(text_target, dim=0).to(self.device_env.device, non_blocking=True)
-        image_input = image_input.to(self.device_env.device, non_blocking=True)
-
-        # Add OCR-related metrics and generation
-
-        ocr_metrics, _ = get_ocr_metrics(
-            model=self.model,
-            tokenizer=self.tokenizer,
-            image_input=image_input,
-            text_input=text_target,
-            device_env=self.device_env,
-            max_recursion_length=self.max_recursion_length,
-        )"""
-
-        # Add OCR-related metrics and generation
-
-        ocr_metrics, ocr_reconstructed_sample = get_ocr_metrics(
-            model=self.model,
-            tokenizer=self.tokenizer,
-            image_input=image_input,
-            text_input=text_target,
-            device_env=self.device_env,
-            max_recursion_length=self.max_recursion_length
-            )
-        if ocr_metrics and ocr_reconstructed_sample:
-            metrics['ocr_reconstruction'] = ocr_metrics
-            eval_data['ocr_reconstruction_data'] = ocr_reconstructed_sample
-        else:
-            _logger.info("Can't generate text from current batch. Skipping metrics...")
-        
-        # TODO Add other metrics relevant for eval step
-        # 
-        # metrics['metric_category'] = ... 
-        return metrics, eval_data
-
-    def state_dict(self):
-        state_dicts = {}
-        state_dicts['model'] = self.model.state_dict()
-        state_dicts['optimizer'] = self.optimizer.state_dict()
-        if hasattr(self.scheduler, 'state_dict'):
-            state_dicts['scheduler'] = self.scheduler.state_dict()
-        if self.scaler is not None:
-            state_dicts['scaler'] = self.scaler.state_dict()
-        return state_dicts
-
-    def load_state_dict(self, state_dict):
-        pass
-
-    def __repr__(self):
-        outputs = [
-            f'model: {repr(self.model)}',
-            f'opt: {repr(self.optimizer)}',
-            f'sched: {repr(self.scheduler)}',
-        ]
-        return '\n'.join(outputs)

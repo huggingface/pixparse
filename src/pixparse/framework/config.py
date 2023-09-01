@@ -18,6 +18,7 @@ class OptimizationCfg:
     grad_accum_steps: int = 1
     momentum: Optional[float] = None
     betas: Optional[Tuple[float, float]] = None
+    layer_decay: Optional[float] = None
 
 
 @dataclass
@@ -28,10 +29,12 @@ class TaskTrainCfg:
     opt: OptimizationCfg = field(default_factory=OptimizationCfg)
     dtype: Optional[str] = None
     amp: bool = True
+    model_name: str = ""
 
 @dataclass
 class TaskEvalCfg:
     dtype: Optional[str] = None
     amp: bool = True
+    model_name: str = ""
     model_state_dict: dict = field(default_factory=dict) #FIXME move out state dict into dict of dict
 
