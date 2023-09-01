@@ -137,6 +137,24 @@ python -m pixparse.app.train \
   --train.wandb False \
   --train.log-filename out.log
 ```
+
+To evaluate a model on CORD dataset:
+
+```bash
+python -m pixparse.app.eval \
+  --task-name cruller_eval_cord \
+  --data.eval.source naver-clova-ix/cord-v2 \
+  --data.eval.format hf_dataset \
+  --data.eval.split test \
+  --data.eval.num-samples 100 \
+  --data.eval.batch-size 16 \
+  --data.eval.num-workers 8 \
+  --model-name cruller_base \
+  --task.dtype bfloat16 \
+  --output-dir /fsx/pablo/metrics_finetune \
+  --eval.checkpoint-path /fsx/pablo/training_pixparse/20230830-133114-task_cruller_finetune_cord-model_cruller_base-lr_3.0e-05-b_8/checkpoint-29.pt \
+
+```
 ## Updates
 
 2023-06-14
