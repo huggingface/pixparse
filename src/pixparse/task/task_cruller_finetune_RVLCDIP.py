@@ -295,7 +295,7 @@ class TaskCrullerFinetuneRVLCDIP(TaskTrain):
             truncation=True).input_ids[0]
 
         labels_tokens = [ 
-            tokenizer_fn(self.task_start_token + self.tokenizer.trunk.bos_token + "<" + self.int2str[label] + "/>" + self.tokenizer.trunk.eos_token)
+            tokenizer_fn(self.task_start_token + "<" + self.int2str[label] + "/>" + self.tokenizer.trunk.eos_token)
             for label in labels
         ]
         transform = self.image_preprocess_train
@@ -303,6 +303,9 @@ class TaskCrullerFinetuneRVLCDIP(TaskTrain):
         images = torch.stack([transform(img) for img in images])
         labels = torch.stack(labels_tokens)
         targets = torch.stack([self.text_input_to_target(text) for text in labels])
+
+        labels = labels[:, :-1]
+        targets = targets[:, 1:]
 
         return {"image": images, "label": labels, "text_target": targets}
 
@@ -314,7 +317,7 @@ class TaskCrullerFinetuneRVLCDIP(TaskTrain):
 
         image_input = image_input.to(self.device_env.device, non_blocking=True)
         label = label.to(self.device_env.device, non_blocking=True)
-        text_target = text_target.to(self.device_env.device, non_blocking=True)        
+        text_target = text_target.to(self.device_env.device, non_blocking=True)
         accum_steps = self.cfg.opt.grad_accum_steps
         need_update = (self.interval_batch_idx + 1) % accum_steps == 0
 
