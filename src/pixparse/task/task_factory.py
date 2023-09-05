@@ -21,21 +21,19 @@ from pixparse.task import (
     TaskCrullerEvalRVLCDIPCfg,
     TaskCrullerEvalCORD,
     TaskCrullerEvalCORDCfg,
+    TaskCrullerEvalDOCVQA,
+    TaskCrullerEvalDOCVQACfg,
     TaskCrullerPretrain,
     TaskCrullerPretrainCfg,
     TaskCrullerFinetuneRVLCDIP,
     TaskCrullerFinetuneRVLCDIPCfg,
     TaskCrullerFinetuneCORD,
     TaskCrullerFinetuneCORDCfg,
+    TaskCrullerFinetuneDOCVQA,
+    TaskCrullerFinetuneDOCVQACfg,
     TaskCrullerFinetuneXent,
     TaskCrullerFinetuneXentCfg,
 )
-
-from chug.common import LoaderBundle
-
-_logger = logging.getLogger(__name__)
-
-import time
 
 
 class TaskFactory:
@@ -47,6 +45,7 @@ class TaskFactory:
         "cruller_eval_ocr": (TaskCrullerEvalOCR, TaskCrullerEvalOCRCfg),
         "cruller_eval_rvlcdip": (TaskCrullerEvalRVLCDIP, TaskCrullerEvalRVLCDIPCfg),
         "cruller_eval_cord": (TaskCrullerEvalCORD, TaskCrullerEvalCORDCfg),
+        "cruller_eval_docvqa": (TaskCrullerEvalDOCVQA, TaskCrullerEvalDOCVQACfg),
         "donut_eval_ocr": (TaskDonutEvalOCR, TaskDonutEvalOCRCfg),
         "cruller_pretrain": (TaskCrullerPretrain, TaskCrullerPretrainCfg),
         "cruller_finetune_rvlcdip": (
@@ -54,6 +53,7 @@ class TaskFactory:
             TaskCrullerFinetuneRVLCDIPCfg,
         ),
         "cruller_finetune_cord": (TaskCrullerFinetuneCORD, TaskCrullerFinetuneCORDCfg),
+        "cruller_finetune_docvqa": (TaskCrullerFinetuneDOCVQA, TaskCrullerFinetuneDOCVQACfg),
         #"cruller_finetune_trainticket": (
         #    TaskCrullerFinetuneTrainTicket,
         #    TaskCrullerFinetuneTrainTicketCfg,
