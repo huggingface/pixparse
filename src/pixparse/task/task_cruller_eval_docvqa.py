@@ -84,7 +84,9 @@ class TaskCrullerEvalDOCVQA(TaskEval):
             "<sep/>",  # JSON list separator
             self.task_start_token,  # task start (based on dataset/task)
             self.prompt_end_token,  # prompt end (or task_start for pretrain)
-            # ... ADD DOCVQA TOKENS
+            "<s_question>",
+            "</s_question>",
+            "</s_answer>",
         ]
 
         # ---- add pretraining tokens 
@@ -169,6 +171,9 @@ class TaskCrullerEvalDOCVQA(TaskEval):
                 ),
             ]
         )
+
+        self.raw_predictions_test = dict()
+
     def setup(self):
         device = self.device_env.device
         self.model.load_state_dict(self.resume_state_dict)
@@ -236,15 +241,17 @@ class TaskCrullerEvalDOCVQA(TaskEval):
         return target
 
     def collate_fn(self, batch):
+        image_ids = [item['image_id'] for item in batch]
         images = [item['image'] for item in batch]
         q_and_as = [np.random.choice(item['labels']) for item in batch]
     
-        transform = self.image_preprocess_train
+        transform = self.image_preprocess_eval
         images = torch.stack([transform(img) for img in images])
     
         return {
             "image": images,
             "prompt": q_and_as,
+            "image_ids": image_ids,
         }
 
 
@@ -254,9 +261,8 @@ class TaskCrullerEvalDOCVQA(TaskEval):
         Current limitation: sample-by-sample decoding.
         """
         metrics = {}
-        for image, prompt in zip(batch["image"], batch['prompt']):
-            decoded_gt = self.tokenizer.trunk.decode(prompt)
-            ground_truth = token2json(decoded_gt)
+        for image, prompt, image_id in zip(batch["image"], batch['prompt'], batch['image_ids']):
+            ground_truth = token2json(prompt)
             with torch.inference_mode():
                 tensor_image = image.unsqueeze(0).to(self.device_env.device)  # Adding an extra dimension for batch
                 output = self.model.image_encoder(tensor_image)
@@ -284,6 +290,14 @@ class TaskCrullerEvalDOCVQA(TaskEval):
                     input_ids = torch.tensor(self.tokenizer.trunk.encode(current_string, add_special_tokens=False)).unsqueeze(0).to(self.device_env.device)
 
                 predicted_json = token2json(current_string)
+            self.raw_predictions_test[image_id] = current_string
+            print("----------Ground truth json is:")
+            print(ground_truth)
+            print("----------Predicted json is:")
+            print(predicted_json)
+            print("----------Predicted tokens were:")
+            print(current_string)
+            print('------')
 
             # FIXME we should only compare generated answers vs ground truth answers
             self.all_predictions.append(predicted_json)

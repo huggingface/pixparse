@@ -56,7 +56,7 @@ class CustomVQADataset(Dataset):
         if self.transform:
             image = self.transform(image)
         
-        return {"image": image, "labels": labels}
+        return {"image": image, "labels": labels, "image_id": image_id}
 
 class SafeDataset:
     """

@@ -63,28 +63,6 @@ class TaskCrullerFinetuneDOCVQACfg(TaskTrainCfg):
         else:
             self.model_name = "custom"
 
-def prepare_inputs_for_inference(
-    tokenizer,
-    input_ids: torch.Tensor,
-    encoder_outputs: torch.Tensor,
-    past_key_values=None,
-    past=None,
-    use_cache: bool = None,
-    attention_mask: torch.Tensor = None,
-):
-    if past is not None:
-        past_key_values = past
-    attention_mask = input_ids.ne(tokenizer.trunk.pad_token_id).long()
-    if past_key_values is not None:
-        input_ids = input_ids[:, -1:]
-    output = {
-        "input_ids": input_ids,
-        "attention_mask": attention_mask,
-        "past_key_values": past_key_values,
-        "use_cache": use_cache,
-        "encoder_hidden_states": encoder_outputs,  # .last_hidden_state,
-    }
-    return output
 
 class TaskCrullerFinetuneDOCVQA(TaskTrain):
     def __init__(
@@ -129,9 +107,6 @@ class TaskCrullerFinetuneDOCVQA(TaskTrain):
             "</s_question>",
             "</s_answer>",
         ]
-
-
-        
 
         preproc_fn = preprocess_text_anno if self.text_anno_fn else preprocess_ocr_anno
         self.anno_preprocess_train = partial(
@@ -358,20 +333,13 @@ class TaskCrullerFinetuneDOCVQA(TaskTrain):
 
         def _forward():
             with self.autocast():
-                if self.finetune_donut_weights:
-                    #print(image_input.shape, label.shape, text_target.shape)
-                    output = self.model(pixel_values=image_input, decoder_input_ids=label, labels=text_target)
-                    logits = output["logits"]
-                else:
-                    output = self.model(image_input, label)
-                    logits = output["logits"]
-                #print(logits.shape, text_target.shape)
+                output = self.model(image_input, label)
+                logits = output["logits"]
                 
                 loss = self.loss(
                     logits.view(-1, self.vocab_size),
                     text_target.view(-1),
                 )
-                #print(loss.item())
             if accum_steps > 1:
                 loss /= accum_steps
             return loss
