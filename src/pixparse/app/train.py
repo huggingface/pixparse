@@ -16,6 +16,8 @@ from pixparse.utils.s3_utils import load_checkpoint_from_s3
 from pixparse.task import TaskFactory
 
 from chug.webdataset import create_doc_anno_pipe
+
+from collections import OrderedDict
 _logger = logging.getLogger('train')
 
 
@@ -145,7 +147,10 @@ def main():
             ), f"Cannot find checkpoint {checkpoint_path}: File not found"
 
             checkpoint = torch.load(train_cfg.checkpoint_path)
-        state_dict = checkpoint["model"]
+        if isinstance(checkpoint, OrderedDict):
+            state_dict = checkpoint
+        else:
+            state_dict = checkpoint["model"]
         task.state_dict = state_dict
         task.resume = True
 

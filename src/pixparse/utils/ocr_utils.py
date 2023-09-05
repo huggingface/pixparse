@@ -10,7 +10,7 @@ import csv
 
 
 def get_ocr_metrics(
-    model, tokenizer, image_input, text_input, device_env, max_recursion_length
+    model, tokenizer, image_input, text_input, device_env, max_recursion_length, prompt_token: str
 ) -> Optional[Tuple[dict, dict]]:
     """
     Calculate OCR metrics.
@@ -20,6 +20,7 @@ def get_ocr_metrics(
         tokenizer: The tokenizer used in the OCR model.
         image_input: Input images.
         text_input: Expected output text.
+        prompt_token: Cue token for decoding task.
 
     Returns:
         A tuple of two dictionaries containing OCR metrics and a reconstructed sample, or None if all decoded texts or OCR predictions are empty.
@@ -62,6 +63,7 @@ def get_ocr_metrics(
             image_encoding,
             device_env,
             max_recursion_length,
+            prompt_token,
         )
         decoded_texts = tokenizer.trunk.batch_decode(text_input)
         ocr_predictions = [
@@ -139,6 +141,7 @@ def generate_ocr(
     encoder_outputs: torch.FloatTensor,
     device_env,
     max_recursion_length,
+    prompt_token: str,
 ) -> List[str]:
     """
     This function takes outputs from the image processing stack and returns generated text.
@@ -146,7 +149,7 @@ def generate_ocr(
     with torch.inference_mode():
         # Initial input for each sample in the batch is the start token
         generated_tokens = get_generated_tokens(
-            model, tokenizer, encoder_outputs, device_env, max_recursion_length
+            model, tokenizer, encoder_outputs, device_env, max_recursion_length, prompt_token
         )
         generated_texts = [
             tokenizer.trunk.decode(text) for text in generated_tokens.tolist()
@@ -155,14 +158,16 @@ def generate_ocr(
 
 
 def get_generated_tokens(
-    model, tokenizer, encoder_outputs, device_env, max_recursion_length
+    model, tokenizer, encoder_outputs, device_env, max_recursion_length, prompt_token: str,
 ):
     """
     # TODO This "hacky" function should eventually be replaced by .generate() from GenerationMixin that does the same thing.
     """
+    task_pretrain_token_id = tokenizer.trunk.encode(prompt_token, add_special_tokens=False)[0]
+
     input_ids = torch.full(
-        (encoder_outputs.shape[0], 1), tokenizer.trunk.cls_token_id
-    ).to(device_env.device)
+        (encoder_outputs.shape[0], 1), task_pretrain_token_id
+        ).to(device_env.device)
 
     finished_samples = torch.zeros(input_ids.shape[0], dtype=torch.bool).to(
         device_env.device
