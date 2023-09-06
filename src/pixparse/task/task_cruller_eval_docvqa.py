@@ -17,6 +17,7 @@ from pixparse.models import Cruller, ModelCfg, get_model_config
 from pixparse.tokenizers import TokenizerCfg, TokenizerHF
 from pixparse.utils.json_utils import json2token, token2json
 from pixparse.utils.json_utils import JSONParseEvaluator
+from pixparse.utils.metrics import average_normalized_levenshtein_similarity
 
 import numpy as np
 
@@ -73,7 +74,7 @@ class TaskCrullerEvalDOCVQA(TaskEval):
             )
 
         self.task_start_token = "<s_docvqa>"
-        self.prompt_end_token = "<answer/>"
+        self.prompt_end_token = "<s_answer>"
         self.max_position_embeddings = cfg.model.text_decoder.max_length
         self.text_anno_fn = True  # set for image-text dataset experiments
         self.tokenizer = TokenizerHF(cfg.tokenizer)
@@ -241,17 +242,27 @@ class TaskCrullerEvalDOCVQA(TaskEval):
         return target
 
     def collate_fn(self, batch):
-        image_ids = [item['image_id'] for item in batch]
-        images = [item['image'] for item in batch]
-        q_and_as = [np.random.choice(item['labels']) for item in batch]
-    
+        question_ids = []
+        image_ids = []
+        images = []
+        questions = []
+        answers = []
+        for item in batch:
+            question_ids.append(item['question_id'])
+            image_ids.append(item['image_id'])
+            images.append(item['image'])
+            questions.append(item['labels']["question"])
+            answers.append(item['labels']["answers"])
+   
         transform = self.image_preprocess_eval
         images = torch.stack([transform(img) for img in images])
     
         return {
-            "image": images,
-            "prompt": q_and_as,
+            "images": images,
+            "questions": questions,
+            "ground_truth_answers": answers,
             "image_ids": image_ids,
+            "question_ids": question_ids,
         }
 
 
@@ -261,15 +272,12 @@ class TaskCrullerEvalDOCVQA(TaskEval):
         Current limitation: sample-by-sample decoding.
         """
         metrics = {}
-        for image, prompt, image_id in zip(batch["image"], batch['prompt'], batch['image_ids']):
-            ground_truth = token2json(prompt)
-            with torch.inference_mode():
-                tensor_image = image.unsqueeze(0).to(self.device_env.device)  # Adding an extra dimension for batch
-                output = self.model.image_encoder(tensor_image)
-                
+        image_outputs = self.model.image_encoder(batch['images'].to(self.device_env.device))
+        for output, question, answers, question_id in zip(image_outputs, batch['questions'], batch['ground_truth_answers'], batch['question_ids']):
+            self.all_ground_truths.append(answers)
+            with torch.inference_mode():           
                 # split out answer from prompt
-
-                current_string = self.task_start_token + prompt.split("<s_answer>")[0] + "<s_answer>" 
+                current_string = self.task_start_token + "<s_question>" + question + "</s_question>" + "<s_answer>" 
                 input_ids = torch.tensor(self.tokenizer.trunk.encode(current_string, add_special_tokens=False)).unsqueeze(0).to(self.device_env.device)  # Adding extra dimension for batch
                 max_steps = 512  # maximum number of steps
 
@@ -290,34 +298,16 @@ class TaskCrullerEvalDOCVQA(TaskEval):
                     input_ids = torch.tensor(self.tokenizer.trunk.encode(current_string, add_special_tokens=False)).unsqueeze(0).to(self.device_env.device)
 
                 predicted_json = token2json(current_string)
-            self.raw_predictions_test[image_id] = current_string
-            print("----------Ground truth json is:")
-            print(ground_truth)
-            print("----------Predicted json is:")
-            print(predicted_json)
-            print("----------Predicted tokens were:")
-            print(current_string)
-            print('------')
-
-            # FIXME we should only compare generated answers vs ground truth answers
-            self.all_predictions.append(predicted_json)
-            self.all_ground_truths.append(ground_truth)
-            acc = self.evaluator.cal_acc(predicted_json, ground_truth)
-            self.acc_list.append(acc)
-
-        metrics["batch_accuracy"] = acc 
+            if 'answer' in predicted_json:
+                self.all_predictions.append(predicted_json['answer'])
+            else:
+                self.all_predictions.append("")
         return metrics
 
     def average_metrics(self, metrics: dict):
-        avg_accuracy = np.mean(self.acc_list)      
-        f1 = self.evaluator.cal_f1(self.all_predictions, self.all_ground_truths)
-
-        self.all_ground_truths = []
-        self.all_predictions = []
-        self.acc_list = []
-
-        return {"average_accuracy": avg_accuracy, "f1_score": f1}
-
+        anls = average_normalized_levenshtein_similarity(ground_truth=self.all_ground_truths, predicted_answers=self.all_predictions)
+        return {"ANLS": anls}
+    
     def end(self):
         # process metrics, average them out? now done in self.average_metrics, called in evaluate, maybe end() should be called in evaluate
         # TODO do that, call average_metrics in end
