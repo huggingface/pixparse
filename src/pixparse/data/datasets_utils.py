@@ -25,13 +25,19 @@ class CustomVQADataset(Dataset):
     Custom implementation of the SinglePageDocVQA dataset.
     len(train_images), len(test_images), len(val_images)
     is (10194, 1287, 1286). Each image has one or more questions and answers attached, or solely questions for the test set.
+    However, in terms of questions, there are 
+    5188 in the test set. 
+    5349 in the val set.
     """
     def __init__(self, root_dir, split, transform=None):
         self.extra_tokens = ['<s_answer>', '</s_answer>', '</s_question>', '<s_question>']
         self.root_dir = root_dir
         self.split = split
         assert split in ["train", "test", "val"], "split is not train, test or val."
-        json_path = os.path.join(root_dir, split, f"processed_{split}_v1.0.json")
+        if split == "test" or split == "val":
+            json_path = os.path.join(root_dir, split, f"{split}_v1.0.json")
+        else:
+            json_path = os.path.join(root_dir, split, f"processed_{split}_v1.0.json")
         assert os.path.isdir(self.root_dir), f"Can't find {root_dir}. Make sure you have DocVQA files locally."
         assert os.path.isfile(json_path), f"{json_path} not found. Make sure you have the processed dataset."
         self.img_dir = os.path.join(root_dir, split)
@@ -42,21 +48,35 @@ class CustomVQADataset(Dataset):
         self.transform = transform
     
     def __len__(self):
+        if self.split == "test" or self.split == "val":
+            return len(self.data_dict['data'])
         return len(self.all_images)
     
     def __getitem__(self, index):
-        image_id = self.all_images[index]
-        questions_and_answers = self.data_dict[image_id]
-        # For the test split, there is no answer.
+        if self.split == "test":
+            entry = self.data_dict['data'][index]
+            labels = "<s_question>" + entry['question'] + "</s_question>"
+            img_path = os.path.join(self.img_dir, entry['image'])
+            question_id = entry['questionId']
+            image_id = entry["image"]
+        if self.split == "val":
+            entry = self.data_dict['data'][index]
+            labels = {"question": entry['question'], "answers": entry['answers']}
+            img_path = os.path.join(self.img_dir, entry['image'])
+            question_id = entry['questionId']
+            image_id = entry["image"]
+        else:
+            image_id = self.all_images[index]
+            questions_and_answers = self.data_dict[image_id]
+            labels = questions_and_answers
 
-        labels = questions_and_answers
-
-        img_path = os.path.join(self.img_dir, image_id)
+            img_path = os.path.join(self.img_dir, image_id)
+            question_id = -1 # Not parsed from original dataset.
         image = Image.open(img_path).convert("L")
         if self.transform:
             image = self.transform(image)
         
-        return {"image": image, "labels": labels, "image_id": image_id}
+        return {"image": image, "labels": labels, "image_id": image_id, "question_id": question_id}
 
 class SafeDataset:
     """
