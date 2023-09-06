@@ -91,7 +91,7 @@ class TaskCrullerFinetuneRVLCDIP(TaskTrain):
         # NOTE: Donut appears to add tokens on the fly during dataset init, requires iterating
         # through full dataset on train start due to not being able to update once tokenizers
         # passed through to dataloader processes, we should store this all in configs up front
-        special_tokens = [
+        self.special_tokens_finetune = [
             "<sep/>",  # JSON list separator
             self.task_start_token,  # task start (based on dataset/task)
             self.prompt_end_token,  # prompt end (or task_start for pretrain)
@@ -114,9 +114,6 @@ class TaskCrullerFinetuneRVLCDIP(TaskTrain):
             "<scientific_report/>",
             "<specification/>",
         ]
-        newly_added_num = self.tokenizer.trunk.add_special_tokens(
-            {"additional_special_tokens": sorted(set(special_tokens))}
-        )
 
         self.int2str = {
             0: "letter",
@@ -137,7 +134,6 @@ class TaskCrullerFinetuneRVLCDIP(TaskTrain):
             15: "memo",
         }
 
-        self.vocab_size = len(self.tokenizer.trunk)
 
         preproc_fn = preprocess_text_anno if self.text_anno_fn else preprocess_ocr_anno
         self.anno_preprocess_train = partial(
@@ -150,8 +146,16 @@ class TaskCrullerFinetuneRVLCDIP(TaskTrain):
 
         self.model = Cruller(cfg.model)  # FIXME would be good to defer weight init here
 
-        # We need to resize the token embeddings after the model has been initialized
-        if newly_added_num > 0:
+        special_tokens_from_pretrain = [
+                "<sep/>",  # JSON list separator
+                "<s_pretrain>",  # task start (based on dataset/task)
+            ]
+
+        num_tokens_from_pretrain = self.tokenizer.trunk.add_special_tokens(
+            {"additional_special_tokens": sorted(set(special_tokens_from_pretrain))}
+        )
+        # need to resize embeddings from pretrained model in order to load it
+        if num_tokens_from_pretrain > 0:
             self.model.text_decoder.trunk.resize_token_embeddings(
                 len(self.tokenizer.trunk)
             )
@@ -213,6 +217,21 @@ class TaskCrullerFinetuneRVLCDIP(TaskTrain):
         Returns:
 
         """
+
+
+        _logger.info(f"Resuming from existing checkpoint. ")
+        self.state_dict = {k.replace("module.", ""): v for k, v in self.state_dict.items()}
+        self.model.load_state_dict(self.state_dict)
+        self.newly_added_num = self.tokenizer.trunk.add_special_tokens(
+            {"additional_special_tokens": sorted(set(self.special_tokens_finetune))}
+        )
+        self.vocab_size = len(self.tokenizer.trunk)
+
+        # We resize token embeddings after initializing
+        if self.newly_added_num > 0:
+            self.model.text_decoder.trunk.resize_token_embeddings(
+                len(self.tokenizer.trunk)
+            )
         # FIXME currently thinking moving to device, setup DDP / FSDP makes sense
         # in setup here vs in __init__(). For __init__ need the model structure to
         # instantiate / setup tokenizer, other aspects. I don't think we need to init
