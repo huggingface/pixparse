@@ -55,8 +55,6 @@ def eval(
     # load wanted checkpoint
 
     metrics = evaluate(task, eval_loaders)
-    with open('/fsx/pablo/raw_test_results_docvqa.json', 'w') as fp:
-        json.dump(task.raw_predictions_test, fp)
     # Do something with metrics, print them, log them, save them
     # FIXME how do we log metrics per dataset?
     with open(cfg.metrics_file_path, "w") as f:
