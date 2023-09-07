@@ -102,8 +102,8 @@ def better_transforms(
                 image_size,
                 longest=1,
                 interpolation=interpolation,
-                random_ratio_prob=.05,
-                random_ratio_range=(0.85, 1.04),
+                random_scale_prob=.05,
+                random_scale_range=(0.85, 1.04),
                 random_aspect_prob=.05,
                 random_aspect_range=(0.9, 1.11),
             ),
@@ -337,8 +337,8 @@ class ResizeKeepRatio:
             size,
             longest=0.,
             interpolation='bilinear',
-            random_ratio_prob=0.,
-            random_ratio_range=(0.85, 1.05),
+            random_scale_prob=0.,
+            random_scale_range=(0.85, 1.05),
             random_aspect_prob=0.,
             random_aspect_range=(0.9, 1.11)
     ):
@@ -348,8 +348,8 @@ class ResizeKeepRatio:
             self.size = (size, size)
         self.interpolation = timm.data.transforms.str_to_interp_mode(interpolation)
         self.longest = float(longest)
-        self.random_ratio_prob = random_ratio_prob
-        self.random_ratio_range = random_ratio_range
+        self.random_scale_prob = random_scale_prob
+        self.random_scale_range = random_scale_range
         self.random_aspect_prob = random_aspect_prob
         self.random_aspect_range = random_aspect_range
 
@@ -358,8 +358,8 @@ class ResizeKeepRatio:
             img,
             target_size,
             longest,
-            random_ratio_prob=0.,
-            random_ratio_range=(0.85, 1.05),
+            random_scale_prob=0.,
+            random_scale_range=(0.85, 1.05),
             random_aspect_prob=0.,
             random_aspect_range=(0.9, 1.11)
     ):
@@ -371,8 +371,8 @@ class ResizeKeepRatio:
         ratio_h = h / target_h
         ratio_w = w / target_w
         ratio = max(ratio_h, ratio_w) * longest + min(ratio_h, ratio_w) * (1. - longest)
-        if random_ratio_prob > 0 and random.random() < random_aspect_prob:
-            ratio_factor = random.uniform(random_ratio_range[0], random_ratio_range[1])
+        if random_scale_prob > 0 and random.random() < random_scale_prob:
+            ratio_factor = random.uniform(random_scale_range[0], random_scale_range[1])
             ratio_factor = (ratio_factor, ratio_factor)
         else:
             ratio_factor = (1., 1.)
@@ -392,7 +392,7 @@ class ResizeKeepRatio:
         """
         size = self.get_params(
             img, self.size, self.longest,
-            self.random_ratio_prob, self.random_ratio_range,
+            self.random_scale_prob, self.random_scale_range,
             self.random_aspect_prob, self.random_aspect_range
         )
         img = F.resize(img, size, self.interpolation)
@@ -418,50 +418,52 @@ class Bitmap:
         return img.point(lut)
 
 
-class ErosionAlb(alb.ImageOnlyTransform):
-    def __init__(self, scale, always_apply=False, p=0.5):
-        super().__init__(always_apply=always_apply, p=p)
-        if type(scale) is tuple or type(scale) is list:
-            assert len(scale) == 2
-            self.scale = scale
-        else:
-            self.scale = (scale, scale)
+if has_albumentations:
 
-    def apply(self, img, **params):
-        kernel = cv2.getStructuringElement(
-            cv2.MORPH_ELLIPSE, tuple(np.random.randint(self.scale[0], self.scale[1], 2))
-        )
-        img = cv2.erode(img, kernel, iterations=1)
-        return img
+    class ErosionAlb(alb.ImageOnlyTransform):
+        def __init__(self, scale, always_apply=False, p=0.5):
+            super().__init__(always_apply=always_apply, p=p)
+            if type(scale) is tuple or type(scale) is list:
+                assert len(scale) == 2
+                self.scale = scale
+            else:
+                self.scale = (scale, scale)
 
-
-class DilationAlb(alb.ImageOnlyTransform):
-    def __init__(self, scale, always_apply=False, p=0.5):
-        super().__init__(always_apply=always_apply, p=p)
-        if type(scale) is tuple or type(scale) is list:
-            assert len(scale) == 2
-            self.scale = scale
-        else:
-            self.scale = (scale, scale)
-
-    def apply(self, img, **params):
-        kernel = cv2.getStructuringElement(
-            cv2.MORPH_ELLIPSE,
-            tuple(np.random.randint(self.scale[0], self.scale[1], 2))
-        )
-        img = cv2.dilate(img, kernel, iterations=1)
-        return img
+        def apply(self, img, **params):
+            kernel = cv2.getStructuringElement(
+                cv2.MORPH_ELLIPSE, tuple(np.random.randint(self.scale[0], self.scale[1], 2))
+            )
+            img = cv2.erode(img, kernel, iterations=1)
+            return img
 
 
-class BitmapAlb(alb.ImageOnlyTransform):
-    def __init__(self, value=0, lower=200, always_apply=False, p=0.5):
-        super().__init__(always_apply=always_apply, p=p)
-        self.lower = lower
-        self.value = value
+    class DilationAlb(alb.ImageOnlyTransform):
+        def __init__(self, scale, always_apply=False, p=0.5):
+            super().__init__(always_apply=always_apply, p=p)
+            if type(scale) is tuple or type(scale) is list:
+                assert len(scale) == 2
+                self.scale = scale
+            else:
+                self.scale = (scale, scale)
 
-    def apply(self, img, **params):
-        img = img.copy()
-        img[img < self.lower] = self.value
-        return img
+        def apply(self, img, **params):
+            kernel = cv2.getStructuringElement(
+                cv2.MORPH_ELLIPSE,
+                tuple(np.random.randint(self.scale[0], self.scale[1], 2))
+            )
+            img = cv2.dilate(img, kernel, iterations=1)
+            return img
+
+
+    class BitmapAlb(alb.ImageOnlyTransform):
+        def __init__(self, value=0, lower=200, always_apply=False, p=0.5):
+            super().__init__(always_apply=always_apply, p=p)
+            self.lower = lower
+            self.value = value
+
+        def apply(self, img, **params):
+            img = img.copy()
+            img[img < self.lower] = self.value
+            return img
 
 
