@@ -3,22 +3,25 @@ from typing import Tuple, Union
 
 import timm.data.transforms
 import torch
-#import torchvision.transforms.v2
 import torchvision.transforms.functional as F
 from torchvision import transforms
 from PIL import Image, ImageOps
-from timm.data.transforms import ResizeKeepRatio, CenterCropOrPad
+from timm.data.transforms import CenterCropOrPad
+from timm.data.constants import IMAGENET_DEFAULT_MEAN, IMAGENET_DEFAULT_STD
 import numpy as np
 
 try:
     import albumentations as alb
     from albumentations.pytorch import ToTensorV2
-    import cv2
     has_albumentations = True
 except ImportError:
     has_albumentations = False
 
-from timm.data.constants import IMAGENET_DEFAULT_MEAN, IMAGENET_DEFAULT_STD
+try:
+    import cv2
+    has_cv2 = True
+except ImportError:
+    has_cv2 = False
 
 
 def create_transforms(
@@ -88,14 +91,22 @@ def better_transforms(
 
     pp = []
     if crop_margin:
+        assert has_cv2, 'CV2 needed to use crop margin.'
         pp += [CropMargin()]
     if align_long_axis:
         pp += [AlignLongAxis(image_size, interpolation=interpolation_mode)]
 
     if training:
         pp += [
-            # FIXME add slight randomness to aspect on resize via different scale per x & y
-            ResizeKeepRatio(image_size, longest=1, interpolation=interpolation),
+            ResizeKeepRatio(
+                image_size,
+                longest=1,
+                interpolation=interpolation,
+                random_ratio_prob=.05,
+                random_ratio_range=(0.85, 1.04),
+                random_aspect_prob=.05,
+                random_aspect_range=(0.9, 1.11),
+            ),
             transforms.RandomApply([
                 Bitmap()
                 ],
@@ -113,7 +124,6 @@ def better_transforms(
             transforms.RandomApply([
                 transforms.RandomAffine(
                     degrees=3,
-                    scale=(.85, 1.04),
                     translate=(0, 0.04),
                     interpolation=interpolation_mode,
                     fill=fill,
@@ -316,6 +326,84 @@ class RandomPad:
         padding = self.get_params(img, self.input_size)
         img = F.pad(img, padding, self.fill)
         return img
+
+
+class ResizeKeepRatio:
+    """ Resize and Keep Ratio
+    """
+
+    def __init__(
+            self,
+            size,
+            longest=0.,
+            interpolation='bilinear',
+            random_ratio_prob=0.,
+            random_ratio_range=(0.85, 1.05),
+            random_aspect_prob=0.,
+            random_aspect_range=(0.9, 1.11)
+    ):
+        if isinstance(size, (list, tuple)):
+            self.size = tuple(size)
+        else:
+            self.size = (size, size)
+        self.interpolation = timm.data.transforms.str_to_interp_mode(interpolation)
+        self.longest = float(longest)
+        self.random_ratio_prob = random_ratio_prob
+        self.random_ratio_range = random_ratio_range
+        self.random_aspect_prob = random_aspect_prob
+        self.random_aspect_range = random_aspect_range
+
+    @staticmethod
+    def get_params(
+            img,
+            target_size,
+            longest,
+            random_ratio_prob=0.,
+            random_ratio_range=(0.85, 1.05),
+            random_aspect_prob=0.,
+            random_aspect_range=(0.9, 1.11)
+    ):
+        """Get parameters
+        """
+        source_size = img.size[::-1]  # h, w
+        h, w = source_size
+        target_h, target_w = target_size
+        ratio_h = h / target_h
+        ratio_w = w / target_w
+        ratio = max(ratio_h, ratio_w) * longest + min(ratio_h, ratio_w) * (1. - longest)
+        if random_ratio_prob > 0 and random.random() < random_aspect_prob:
+            ratio_factor = random.uniform(random_ratio_range[0], random_ratio_range[1])
+            ratio_factor = (ratio_factor, ratio_factor)
+        else:
+            ratio_factor = (1., 1.)
+        if random_aspect_prob > 0 and random.random() < random_aspect_prob:
+            aspect_factor = random.uniform(random_aspect_range[0], random_aspect_range[1])
+            ratio_factor = (ratio_factor[0] / aspect_factor, ratio_factor[1] * aspect_factor)
+        size = [round(x * f / ratio) for x, f in zip(source_size, ratio_factor)]
+        return size
+
+    def __call__(self, img):
+        """
+        Args:
+            img (PIL Image): Image to be cropped and resized.
+
+        Returns:
+            PIL Image: Resized, padded to at least target size, possibly cropped to exactly target size
+        """
+        size = self.get_params(
+            img, self.size, self.longest,
+            self.random_ratio_prob, self.random_ratio_range,
+            self.random_aspect_prob, self.random_aspect_range
+        )
+        img = F.resize(img, size, self.interpolation)
+        return img
+
+    def __repr__(self):
+        interpolate_str = timm.data.transforms.interp_mode_to_str(self.interpolation)
+        format_string = self.__class__.__name__ + '(size={0}'.format(self.size)
+        format_string += f', interpolation={interpolate_str})'
+        format_string += f', longest={self.longest:.3f})'
+        return format_string
 
 
 class Bitmap:
