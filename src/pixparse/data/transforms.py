@@ -134,7 +134,7 @@ def better_transforms(
                 p=.05,
             ),
             transforms.RandomApply([
-                transforms.GaussianBlur(3, sigma=(0.1, 1.0))],
+                transforms.GaussianBlur(3, sigma=(0.1, 0.5))],
                 p=.05,
             ),
             RandomPad(image_size, fill=fill),
