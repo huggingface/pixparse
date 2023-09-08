@@ -8,8 +8,7 @@ from typing import Callable
 from datasets import load_dataset
 from torch.utils.data import DataLoader, DistributedSampler
 from datasets import VerificationMode
-from pixparse.data.datasets_utils import SafeDataset
-
+from pixparse.data.datasets_utils import SafeDataset, CustomVQADataset
 from datasets import load_dataset
 
 class GenericLoader(DataLoader):
@@ -80,7 +79,10 @@ def create_loader(
         )
     elif cfg.format == "hf_dataset":
         # In the case of hf datasets, we use the collator defined at task level
-        dataset = load_dataset(cfg.source, verification_mode=VerificationMode.ALL_CHECKS)[cfg.split]
+        if cfg.source == "SinglePageDocVQA":
+            dataset = CustomVQADataset(root_dir=f"/fsx/pablo/.cache/{cfg.source}", split=cfg.split)
+        else:
+            dataset = load_dataset(cfg.source, verification_mode=VerificationMode.ALL_CHECKS)[cfg.split]
         dataset = SafeDataset(dataset)
         training_sampler = DistributedSampler(
             dataset, rank=local_rank, shuffle=True, seed=seed, num_replicas=world_size, drop_last=True

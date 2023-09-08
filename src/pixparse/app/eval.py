@@ -93,8 +93,8 @@ def main():
     if device_env.is_primary():
         log_path = os.path.join(eval_cfg.output_dir, eval_cfg.log_filename)
 
-    # Setup text logger
-    setup_logging(log_path)
+        # Setup text logger
+        setup_logging(log_path)
     monitor = Monitor(
         eval_cfg.experiment,
         output_dir=eval_cfg.output_dir,

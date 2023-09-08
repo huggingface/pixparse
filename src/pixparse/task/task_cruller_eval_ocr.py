@@ -216,6 +216,7 @@ class TaskCrullerEvalOCR(TaskEval):
             text_input=text_target,
             device_env=self.device_env,
             max_recursion_length=self.max_recursion_length,
+            prompt_token=self.task_start_token,
         )
 
         metrics["ocr_reconstruction"] = ocr_metrics
