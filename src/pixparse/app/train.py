@@ -2,7 +2,7 @@ import logging
 import os
 from dataclasses import dataclass, replace
 from datetime import datetime
-from typing import Optional
+from typing import Dict, Optional
 
 import simple_parsing
 from simple_parsing import ArgumentParser
@@ -15,6 +15,7 @@ from pixparse.utils.name_utils import clean_name
 from pixparse.utils.s3_utils import load_checkpoint_from_s3
 from pixparse.task import TaskFactory
 
+from chug.common import LoaderBundle
 from chug.webdataset import create_doc_anno_pipe
 
 from collections import OrderedDict
@@ -46,20 +47,22 @@ class TrainCfg:
 def train(
         cfg: TrainCfg,
         task: TaskTrain,
-        loaders,
+        loaders: Dict[str, LoaderBundle],
 ):
     device_env = task.device_env
+    train_loader = loaders['train']
     for i in range(task.start_interval, task.num_intervals):
         # FIXME flatten interval loop to have one eval point
         #  i.e step intervals vs epoch intervals handled similarly?
+        train_loader.set_interval(i)
         train_one_interval(
             task,
-            loaders['train'],
+            train_loader,
         )
 
         # save checkpoint
         if device_env.is_primary():
-            checkpoint_dir =  os.path.join(cfg.output_checkpoint_dir, cfg.experiment)
+            checkpoint_dir = os.path.join(cfg.output_checkpoint_dir, cfg.experiment)
             os.makedirs(checkpoint_dir, exist_ok=True)
             torch.save(task.model.state_dict(), os.path.join(checkpoint_dir, f'checkpoint-{i}.pt'))
 
@@ -81,7 +84,7 @@ def main():
 
     device_env = DeviceEnv()
     task, task_cfg = TaskFactory.create_task(task_name=train_cfg.task_name, task_args=args.task, device_env=device_env, monitor=None)
-    
+
     random_seed(train_cfg.seed, rank=device_env.global_rank)
     _logger.info(f"Device env is {device_env}")
 
@@ -124,14 +127,13 @@ def main():
         tensorboard=train_cfg.tensorboard,
         output_enabled=device_env.is_primary(),
     )
-    
+
     # ----- Model resuming from checkpoint -----
     # FIXME make optional for resume. 
     # Task needs to have 
     # -- an attribute OrderedDict state_dict 
     # -- an attribute bool resume
     if train_cfg.resume:
-
         checkpoint_path = train_cfg.checkpoint_path
         train_cfg = replace(train_cfg, checkpoint_path=checkpoint_path)
 
@@ -166,18 +168,17 @@ def main():
     loaders = {}
     assert (data_cfg.train is not None) or (data_cfg.eval is not None), f"Neither data_cfg.train nor data_cfg.eval are set."
     if data_cfg.train is not None:
-        
         loaders['train'] = create_loader(
-        data_cfg.train,
-        is_train=True,
-        collate_fn=task.collate_fn,
-        image_preprocess=task.image_preprocess_train,
-        anno_preprocess=task.anno_preprocess_train,
-        image_fmt=task_cfg.model.image_encoder.image_fmt,
-        world_size=device_env.world_size,
-        local_rank=device_env.local_rank,
-        create_decoder_pipe=create_doc_anno_pipe, # TODO abstract away type of decoder needed
-    )
+            data_cfg.train,
+            is_train=True,
+            collate_fn=task.collate_fn,
+            image_preprocess=task.image_preprocess_train,
+            anno_preprocess=task.anno_preprocess_train,
+            image_fmt=task_cfg.model.image_encoder.image_fmt,
+            world_size=device_env.world_size,
+            local_rank=device_env.local_rank,
+            create_decoder_pipe=create_doc_anno_pipe,  # TODO abstract away type of decoder needed
+        )
     task.train_setup(
         num_batches_per_interval=loaders['train'].num_batches,
     )
