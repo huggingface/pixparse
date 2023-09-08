@@ -33,7 +33,6 @@ def create_loader(
     seed: int = 0,
     world_size: int = 1,
     global_rank: int = 0,
-    local_rank: int = 0,
     create_decoder_pipe: Callable = create_doc_anno_pipe,
 ):
     """
@@ -50,7 +49,7 @@ def create_loader(
         image_fmt (str, optional): Image format for reading images. Default is "L" (8-bit pixels, black and white).
         seed (int, optional): Seed for random operations to ensure reproducibility. Default is 0.
         world_size (int, optional): Total number of processes in the distributed setup. Default is 1.
-        local_rank (int, optional): Rank of the current process in the distributed setup. Default is 0.
+        global_rank (int, optional): Rank of the current process in the distributed setup. Default is 0.
         create_decoder_pipe (Callable, optional): Function to create the annotation decoder pipeline for json documents.
             Default is `create_doc_anno_pipe`.
 
