@@ -5,7 +5,7 @@ import timm.data.transforms
 import torch
 import torchvision.transforms.functional as F
 from torchvision import transforms
-from PIL import Image, ImageOps
+from PIL import Image, ImageOps, ImageFilter
 from timm.data.transforms import CenterCropOrPad
 from timm.data.constants import IMAGENET_DEFAULT_MEAN, IMAGENET_DEFAULT_STD
 import numpy as np
@@ -111,6 +111,13 @@ def better_transforms(
                 Bitmap()
                 ],
                 p=.05
+            ),
+            transforms.RandomApply([
+                transforms.RandomChoice([
+                    Erosion(3),
+                    Dilation(3),
+                ])],
+                p=.02
             ),
             transforms.RandomApply([
                 transforms.RandomAffine(
@@ -416,6 +423,54 @@ class Bitmap:
         else:
             lut = self.lut
         return img.point(lut)
+
+
+class Erosion:
+    def __init__(self, scale=3):
+        super().__init__()
+        if type(scale) is tuple or type(scale) is list:
+            assert len(scale) == 2
+            self.scale = scale
+        else:
+            self.scale = (scale, scale)
+
+    @staticmethod
+    def get_params(scale):
+        if type(scale) is tuple or type(scale) is list:
+            assert len(scale) == 2
+            scale = random.choice(scale)
+        return scale
+
+    def __call__(self, img):
+        kernel_size = self.get_params(self.scale)
+        if isinstance(img, torch.Tensor):
+            padding = kernel_size // 2
+            img = -torch.nn.functional.max_pool2d(-img, kernel_size=kernel_size, padding=padding)  # minpool
+        elif isinstance(img, Image.Image):
+            img = img.filter(ImageFilter.MinFilter(kernel_size))
+        return img
+
+
+class Dilation:
+    def __init__(self, scale=3):
+        super().__init__()
+        self.scale = scale
+
+    @staticmethod
+    def get_params(scale):
+        if type(scale) is tuple or type(scale) is list:
+            assert len(scale) == 2
+            scale = random.choice(scale)
+        return scale
+
+    def __call__(self, img):
+        kernel_size = self.get_params(self.scale)
+        if isinstance(img, torch.Tensor):
+            padding = kernel_size // 2
+            img = torch.nn.functional.max_pool2d(img, kernel_size=kernel_size, padding=padding)
+        elif isinstance(img, Image.Image):
+            img = img.filter(ImageFilter.MaxFilter(kernel_size))
+        return img
 
 
 if has_albumentations:
