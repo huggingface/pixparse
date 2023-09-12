@@ -20,6 +20,7 @@ from pixparse.utils.json_utils import JSONParseEvaluator
 from pixparse.utils.metrics import average_normalized_levenshtein_similarity
 
 import numpy as np
+import time
 
 from ast import literal_eval
 
@@ -51,6 +52,7 @@ class TaskCrullerEvalDOCVQACfg(TaskEvalCfg):
         else:
             self.model_name = "custom"
 
+   
 class TaskCrullerEvalDOCVQA(TaskEval):
     """Simple task to evaluate donut on FUNSD data and get metrics in similar format as Cruller."""
 
@@ -240,6 +242,22 @@ class TaskCrullerEvalDOCVQA(TaskEval):
         slice_id = torch.nonzero(target == prompt_end_token_id).sum() + 1
         target[:slice_id] = ignore_id
         return target
+    
+    def time_and_log(func):
+        """
+        Method decorator to log execution time
+        """
+        def wrapper(self, *args, **kwargs):
+            start_time = time.time()
+            result = func(self, *args, **kwargs)
+            end_time = time.time()
+            execution_time = end_time - start_time
+            _logger.info(
+                f"Executed method {func.__name__} in {execution_time:.2f} seconds"
+            )
+            return result
+
+        return wrapper
 
     def collate_fn(self, batch):
         question_ids = []
@@ -265,7 +283,7 @@ class TaskCrullerEvalDOCVQA(TaskEval):
             "question_ids": question_ids,
         }
 
-
+    @time_and_log
     def step(self, batch):
         """
         Does one step of evaluation for DOCVQA. 
