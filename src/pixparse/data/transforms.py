@@ -182,7 +182,7 @@ def nougat_transforms(
     else:
         interpolation_mode = 2  # bicubic
 
-    tv_pp = []
+    tv_pp = [transforms.Grayscale()]
     alb_pp = []
     if crop_margin:
         tv_pp += [CropMargin()]
