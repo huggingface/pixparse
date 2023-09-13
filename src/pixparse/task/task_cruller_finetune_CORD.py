@@ -1,40 +1,29 @@
 import logging
+from ast import literal_eval
+from collections import OrderedDict
 from contextlib import nullcontext
-from dataclasses import dataclass, field, asdict
+from dataclasses import dataclass, field
 from functools import partial
-from typing import Optional, List, Any
+from typing import Any, Dict, List, Optional
 
-import torch
-from torch.utils.data import DataLoader
-import torch.nn as nn
-import torch.nn.functional as F
-
-import torchvision.transforms as transforms
-from torchvision.transforms import functional as transformsF
-from torchvision.transforms import Lambda
 import timm
 import timm.utils
+import torch
+import torch.nn as nn
+import torchvision.transforms as transforms
+from timm.data.constants import IMAGENET_DEFAULT_MEAN, IMAGENET_DEFAULT_STD
 from timm.optim import create_optimizer_v2
 from timm.scheduler import create_scheduler_v2
+from torchvision.transforms import Lambda
+from transformers import VisionEncoderDecoderModel
 
-from pixparse.framework import TaskTrainCfg, TaskTrain, DeviceEnv, Monitor
-from pixparse.models import Cruller, ModelCfg, get_model_config
-from pixparse.tokenizers import TokenizerHF, TokenizerCfg
 from pixparse.data import preprocess_ocr_anno, preprocess_text_anno
-from timm.layers import SelectAdaptivePool2d
-
-from typing import Dict, List
-
-from collections import OrderedDict
-
-from ast import literal_eval
-
-from datasets import load_dataset
-from pixparse.utils.json_utils import json2token, token2json
-from transformers import DonutProcessor, VisionEncoderDecoderModel
-
-from timm.data.constants import IMAGENET_DEFAULT_MEAN, IMAGENET_DEFAULT_STD
-from pixparse.utils.json_utils import JSONParseEvaluator
+from pixparse.data.transforms import create_transforms
+from pixparse.framework import DeviceEnv, Monitor, TaskTrain, TaskTrainCfg
+from pixparse.models import Cruller, ModelCfg, get_model_config
+from pixparse.tokenizers import TokenizerCfg, TokenizerHF
+from pixparse.utils.json_utils import json2token
+                                       
 
 _logger = logging.getLogger(__name__)
 
@@ -194,48 +183,29 @@ class TaskCrullerFinetuneCORD(TaskTrain):
         )
 
         
-        """ Commenting out to test Donut weights
+        self.model = Cruller(cfg.model)  # FIXME would be good to defer weight init here
 
-        """
+        special_tokens_from_pretrain = [
+            "<sep/>",  # JSON list separator
+            "<s_pretrain>",  # task start (based on dataset/task)
+        ]
 
-
-
-        self.finetune_donut_weights = False
-        _logger.info(f'Finetuning donut weights? {self.finetune_donut_weights}')
-
-        if self.finetune_donut_weights:
-            self.model = VisionEncoderDecoderModel.from_pretrained("naver-clova-ix/donut-base")
-        else:
-            self.model = Cruller(cfg.model)  # FIXME would be good to defer weight init here
-
-            special_tokens_from_pretrain = [
-                "<sep/>",  # JSON list separator
-                "<s_pretrain>",  # task start (based on dataset/task)
-            ]
-
-            num_tokens_from_pretrain = self.tokenizer.trunk.add_special_tokens(
-                {"additional_special_tokens": sorted(set(special_tokens_from_pretrain))}
+        num_tokens_from_pretrain = self.tokenizer.trunk.add_special_tokens(
+            {"additional_special_tokens": sorted(set(special_tokens_from_pretrain))}
+        )
+        # need to resize embeddings from pretrained model in order to load it
+        if num_tokens_from_pretrain > 0:
+            self.model.text_decoder.trunk.resize_token_embeddings(
+                len(self.tokenizer.trunk)
             )
-            # need to resize embeddings from pretrained model in order to load it
-            if num_tokens_from_pretrain > 0:
-                self.model.text_decoder.trunk.resize_token_embeddings(
-                    len(self.tokenizer.trunk)
-                )
 
         self.loss = nn.CrossEntropyLoss(ignore_index=-100)
         self.has_no_sync = False
-        if self.finetune_donut_weights:
-            self.num_image_chs = 3
-        else:
-            self.num_image_chs = 1 if cfg.model.image_encoder.image_fmt == "L" else 3
+        self.num_image_chs = 1 if cfg.model.image_encoder.image_fmt == "L" else 3
 
         # TODO refactor, used in many tasks
-        if self.finetune_donut_weights:
-            img_mean = IMAGENET_DEFAULT_MEAN
-            img_std = IMAGENET_DEFAULT_STD
-        else:
-            img_mean = self.model.image_encoder.trunk.pretrained_cfg["mean"]
-            img_std = self.model.image_encoder.trunk.pretrained_cfg["std"]
+        img_mean = self.model.image_encoder.trunk.pretrained_cfg["mean"]
+        img_std = self.model.image_encoder.trunk.pretrained_cfg["std"]
 
         self.img_mean = (
             sum(img_mean) / len(img_mean)
@@ -252,29 +222,8 @@ class TaskCrullerFinetuneCORD(TaskTrain):
         # preprocessors cross both the task/model & dataset domain,
         # created within task here and passed to data loaders
 
-        if self.finetune_donut_weights:
-            image_size = (1280, 960)
-            color_transform = Lambda(lambda x: x)
-        else:
-            image_size = cfg.model.image_encoder.image_size
-            color_transform = transforms.Grayscale()
-
-        self.image_preprocess_train = transforms.Compose(
-            [
-                transforms.ToTensor(),
-                color_transform,
-                transforms.Resize(
-                    image_size,
-                    interpolation=transforms.InterpolationMode.BICUBIC,
-                    antialias=True,
-                ),
-                # transforms.CenterCrop(448),  # FIXME need better aspect preserving resize & pad
-                transforms.Normalize(
-                    mean=self.img_mean,
-                    std=self.img_std,
-                ),
-            ]
-        )
+       
+        self.image_preprocess_train = create_transforms(cfg.transforms, image_size=cfg.model.image_encoder.image_size, image_mean=self.img_mean, image_std=self.img_std)
 
     def train_setup(
         self,
@@ -300,33 +249,21 @@ class TaskCrullerFinetuneCORD(TaskTrain):
         # instantiate / setup tokenizer, other aspects. I don't think we need to init
         # weights / move to device until here
         #         if self.resume:
-        if self.finetune_donut_weights:
-            # We just add tokens, weights of donut are already initialized
-            self.newly_added_num = self.tokenizer.trunk.add_special_tokens(
-                {"additional_special_tokens": sorted(set(self.special_tokens_finetune))}
-            )
-            self.vocab_size = len(self.tokenizer.trunk)
 
-            # We resize token embeddings after initializing
-            if self.newly_added_num > 0:
-                self.model.decoder.resize_token_embeddings(
-                    len(self.tokenizer.trunk)
-                )
-        else:
-            _logger.info(f"Resuming from existing checkpoint. ")
-            self.state_dict = {k.replace("module.", ""): v for k, v in self.state_dict.items()}
-            self.model.load_state_dict(self.state_dict)
-            self.newly_added_num = self.tokenizer.trunk.add_special_tokens(
-                {"additional_special_tokens": sorted(set(self.special_tokens_finetune))}
-            )
-            self.vocab_size = len(self.tokenizer.trunk)
+        _logger.info(f"Resuming from existing checkpoint. ")
+        self.state_dict = {k.replace("module.", ""): v for k, v in self.state_dict.items()}
+        self.model.load_state_dict(self.state_dict)
+        self.newly_added_num = self.tokenizer.trunk.add_special_tokens(
+            {"additional_special_tokens": sorted(set(self.special_tokens_finetune))}
+        )
+        self.vocab_size = len(self.tokenizer.trunk)
 
-            # We resize token embeddings after initializing
-            if self.newly_added_num > 0:
-                self.model.text_decoder.trunk.resize_token_embeddings(
-                    len(self.tokenizer.trunk)
-                )
-            
+        # We resize token embeddings after initializing
+        if self.newly_added_num > 0:
+            self.model.text_decoder.trunk.resize_token_embeddings(
+                len(self.tokenizer.trunk)
+            )
+        
         device = self.device_env.device
         self.model.to(device)
 
@@ -448,13 +385,8 @@ class TaskCrullerFinetuneCORD(TaskTrain):
 
         def _forward():
             with self.autocast():
-                if self.finetune_donut_weights:
-                    #print(image_input.shape, label.shape, text_target.shape)
-                    output = self.model(pixel_values=image_input, decoder_input_ids=label, labels=text_target)
-                    logits = output["logits"]
-                else:
-                    output = self.model(image_input, label)
-                    logits = output["logits"]
+                output = self.model(image_input, label)
+                logits = output["logits"]
                 #print(logits.shape, text_target.shape)
                 
                 loss = self.loss(
