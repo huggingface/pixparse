@@ -158,7 +158,7 @@ def main():
         anno_preprocess=task.anno_preprocess_eval,
         image_fmt=task_cfg.model.image_encoder.image_fmt,
         world_size=device_env.world_size,
-        local_rank=device_env.local_rank,
+        global_rank=device_env.global_rank,
         create_decoder_pipe=create_image_text_pipe, # TODO abstract away type of decoder needed
         # world_size=device_env.world_size
     )
