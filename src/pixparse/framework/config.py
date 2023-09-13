@@ -30,6 +30,7 @@ class TaskTrainCfg:
     dtype: Optional[str] = None
     amp: bool = True
     model_name: str = ""
+    transforms: str = "nougat" 
 
 @dataclass
 class TaskEvalCfg:
