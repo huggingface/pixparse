@@ -7,6 +7,9 @@ import jiwer.transforms as tr
 import re
 from typing import List, Tuple, Optional
 import csv
+import logging
+
+_logger = logging.getLogger("ocr")
 
 
 def get_ocr_metrics(
@@ -115,7 +118,7 @@ def get_cer_wer_metrics(
     ocr_predictions,
     decoded_texts,
 ):
-    try: 
+    try:
         wer_output = wer(
             reference=decoded_texts,
             hypothesis=ocr_predictions,
@@ -131,7 +134,9 @@ def get_cer_wer_metrics(
         )
         ocr_pretraining_metrics["cer"] = cer_output
     except Exception as e:
-        print(f'Encountered exception {e} when computing wer/cer metrics. Length of ground truth texts is {len(decoded_texts)}, length of generated texts is {len(ocr_predictions)}.')
+        _logger.info(
+            f"Encountered exception {e} when computing wer/cer metrics. Length of ground truth texts is {len(decoded_texts)}, length of generated texts is {len(ocr_predictions)}."
+        )
     return ocr_pretraining_metrics
 
 

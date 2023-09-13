@@ -1,15 +1,14 @@
-from chug import create_wds_loader, create_doc_anno_pipe, create_image_text_pipe
-from chug.common import LoaderBundle, SharedCount
-
-from .config import DatasetCfg
-
 from typing import Callable
 
+from chug import create_wds_loader, create_doc_anno_pipe
+from chug.common import LoaderBundle
+from datasets import VerificationMode
 from datasets import load_dataset
 from torch.utils.data import DataLoader, DistributedSampler
-from datasets import VerificationMode
+
 from pixparse.data.datasets_utils import SafeDataset, CustomVQADataset
-from datasets import load_dataset
+from .config import DatasetCfg
+
 
 class GenericLoader(DataLoader):
     """
@@ -20,7 +19,8 @@ class GenericLoader(DataLoader):
         self.num_batches = len(self.dataset) // self.batch_size
         if len(self.dataset) % self.batch_size != 0:
             self.num_batches += 1
-        
+
+
 def create_loader(
     cfg: DatasetCfg,
     is_train: bool,
@@ -32,7 +32,7 @@ def create_loader(
     start_interval: int = 0,
     seed: int = 0,
     world_size: int = 1,
-    local_rank: int = 0,
+    global_rank: int = 0,
     create_decoder_pipe: Callable = create_doc_anno_pipe,
 ):
     """
@@ -49,7 +49,7 @@ def create_loader(
         image_fmt (str, optional): Image format for reading images. Default is "L" (8-bit pixels, black and white).
         seed (int, optional): Seed for random operations to ensure reproducibility. Default is 0.
         world_size (int, optional): Total number of processes in the distributed setup. Default is 1.
-        local_rank (int, optional): Rank of the current process in the distributed setup. Default is 0.
+        global_rank (int, optional): Rank of the current process in the distributed setup. Default is 0.
         create_decoder_pipe (Callable, optional): Function to create the annotation decoder pipeline for json documents.
             Default is `create_doc_anno_pipe`.
 
@@ -80,31 +80,40 @@ def create_loader(
     elif cfg.format == "hf_dataset":
         # In the case of hf datasets, we use the collator defined at task level
         if cfg.source == "SinglePageDocVQA":
-            dataset = CustomVQADataset(root_dir=f"/fsx/pablo/.cache/{cfg.source}", split=cfg.split)
+            dataset = CustomVQADataset(
+                root_dir=f"/fsx/pablo/.cache/{cfg.source}",  # FIXME hacky hack
+                split=cfg.split,
+            )
         else:
-            dataset = load_dataset(cfg.source, verification_mode=VerificationMode.ALL_CHECKS)[cfg.split]
+            dataset = load_dataset(
+                cfg.source,
+                verification_mode=VerificationMode.ALL_CHECKS
+            )[cfg.split]
         dataset = SafeDataset(dataset)
-        training_sampler = DistributedSampler(
-            dataset, rank=local_rank, shuffle=True, seed=seed, num_replicas=world_size, drop_last=True
-        ) # FIXME should be global_rank
-        if is_train:
-            # create a shared epoch store to sync epoch to dataloader worker proc
-            shared_interval_count = SharedCount(count=start_interval)
-        else:
-            shared_interval_count = None
-        num_batches = len(dataset) // cfg.batch_size
+
+        sampler = None
+        if world_size > 1:
+            sampler = DistributedSampler(
+                dataset,
+                rank=global_rank,
+                shuffle=True,
+                seed=seed,
+                num_replicas=world_size,
+                drop_last=True,
+            )
 
         base_loader = DataLoader(
             dataset=dataset, 
             collate_fn=collate_fn,
-            sampler=training_sampler, 
+            sampler=sampler,
             batch_size=cfg.batch_size, 
             num_workers=cfg.num_workers,
-            )
+        )
+
         loader = LoaderBundle(
-        loader=base_loader,
-        num_batches=num_batches,
-        num_samples=cfg.num_samples,
-        shared_interval=shared_interval_count,
-    )
+            loader=base_loader,
+            num_batches=len(base_loader),
+            num_samples=len(dataset),
+            sampler=sampler,
+        )
     return loader
