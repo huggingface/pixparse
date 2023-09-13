@@ -74,8 +74,7 @@ class TaskCrullerEvalRVLCDIP(TaskEval):
         self.state_dict = OrderedDict()
         self.resume = False
 
-        # Setup task specific tokens
-        special_tokens = [
+        self.special_tokens_finetune = [
             "<sep/>",  # JSON list separator
             self.task_start_token,  # task start (based on dataset/task)
             self.prompt_end_token,  # prompt end (or task_start for pretrain)
@@ -98,12 +97,6 @@ class TaskCrullerEvalRVLCDIP(TaskEval):
             "<scientific_report/>",
             "<specification/>",
         ]
-        newly_added_num = self.tokenizer.trunk.add_special_tokens(
-            {"additional_special_tokens": sorted(set(special_tokens))}
-        )
-
-        self.has_no_sync = False
-        self.num_image_chs = 1 if cfg.model.image_encoder.image_fmt == "L" else 3
 
         self.int2str = {
             0: "letter",
@@ -124,6 +117,7 @@ class TaskCrullerEvalRVLCDIP(TaskEval):
             15: "memo",
         }
 
+
         self.vocab_size = len(self.tokenizer.trunk)
 
         preproc_fn = preprocess_text_anno if self.text_anno_fn else preprocess_ocr_anno
@@ -137,12 +131,19 @@ class TaskCrullerEvalRVLCDIP(TaskEval):
 
         self.model = Cruller(cfg.model)  # FIXME would be good to defer weight init here
 
-        # We need to resize the token embeddings after the model has been initialized
-        if newly_added_num > 0:
+        special_tokens_from_pretrain = [
+                "<sep/>",  # JSON list separator
+                #"<s_pretrain>",  # task start (based on dataset/task)
+            ]
+
+        num_tokens_from_pretrain = self.tokenizer.trunk.add_special_tokens(
+            {"additional_special_tokens": sorted(set(special_tokens_from_pretrain))}
+        )
+        # need to resize embeddings from pretrained model in order to load it
+        if num_tokens_from_pretrain > 0:
             self.model.text_decoder.trunk.resize_token_embeddings(
                 len(self.tokenizer.trunk)
             )
-
         img_mean = self.model.image_encoder.trunk.pretrained_cfg["mean"]
         img_std = self.model.image_encoder.trunk.pretrained_cfg["std"]
 
@@ -177,6 +178,18 @@ class TaskCrullerEvalRVLCDIP(TaskEval):
 
     def setup(self):
         device = self.device_env.device
+
+        self.newly_added_num = self.tokenizer.trunk.add_special_tokens(
+            {"additional_special_tokens": sorted(set(self.special_tokens_finetune))}
+        )
+        self.vocab_size = len(self.tokenizer.trunk)
+
+        # We resize token embeddings after initializing
+        if self.newly_added_num > 0:
+            self.model.text_decoder.trunk.resize_token_embeddings(
+                len(self.tokenizer.trunk)
+            )
+
         self.model.load_state_dict(self.resume_state_dict)
         self.model.eval()
         self.model.to(device)
