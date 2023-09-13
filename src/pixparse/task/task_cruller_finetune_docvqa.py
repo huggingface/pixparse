@@ -21,6 +21,8 @@ from pixparse.framework import TaskTrainCfg, TaskTrain, DeviceEnv, Monitor
 from pixparse.models import Cruller, ModelCfg, get_model_config
 from pixparse.tokenizers import TokenizerHF, TokenizerCfg
 from pixparse.data import preprocess_ocr_anno, preprocess_text_anno
+from pixparse.data.transforms import create_transforms
+
 from timm.layers import SelectAdaptivePool2d
 
 from typing import Dict, List
@@ -157,8 +159,10 @@ class TaskCrullerFinetuneDOCVQA(TaskTrain):
 
         image_size = cfg.model.image_encoder.image_size
         color_transform = transforms.Grayscale()
+        self.image_preprocess_train = create_transforms(cfg.transforms, image_size=cfg.model.image_encoder.image_size, image_mean=self.img_mean, image_std=self.img_std)
 
-        self.image_preprocess_train = transforms.Compose(
+
+        '''self.image_preprocess_train = transforms.Compose(
             [
                 transforms.ToTensor(),
                 color_transform,
@@ -173,7 +177,7 @@ class TaskCrullerFinetuneDOCVQA(TaskTrain):
                     std=self.img_std,
                 ),
             ]
-        )
+        )'''
 
     def train_setup(
         self,
