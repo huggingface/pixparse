@@ -295,7 +295,8 @@ class TaskCrullerFinetuneDOCVQA(TaskTrain):
             truncation=True,
         ).input_ids[0]
         images = [item['image'] for item in batch]
-        q_and_as = [np.random.choice(item['labels']) for item in batch]
+        q_and_as = [item['labels'] for item in batch]
+        #q_and_as = [np.random.choice(item['labels']) for item in batch]
         
         inputs_to_stack = []
         for text in q_and_as:

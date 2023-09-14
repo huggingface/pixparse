@@ -46,11 +46,17 @@ class CustomVQADataset(Dataset):
             self.data_dict = json.load(f)
         self.all_images = list(self.data_dict.keys())
         self.transform = transform
+        if split == "train":
+            self.train_data = []
+            for image_id, qas in self.data_dict.items():
+                for qa in qas:
+                    self.train_data.append([image_id, qa]) 
     
     def __len__(self):
         if self.split == "test" or self.split == "val":
             return len(self.data_dict['data'])
-        return len(self.all_images)
+        else:
+            return len(self.train_data)
     
     def __getitem__(self, index):
         if self.split == "test":
@@ -66,10 +72,7 @@ class CustomVQADataset(Dataset):
             question_id = entry['questionId']
             image_id = entry["image"]
         else:
-            image_id = self.all_images[index]
-            questions_and_answers = self.data_dict[image_id]
-            labels = questions_and_answers
-
+            image_id, labels = self.train_data[index]
             img_path = os.path.join(self.img_dir, image_id)
             question_id = -1 # Not parsed from original dataset.
         image = Image.open(img_path).convert("L")
