@@ -1,6 +1,7 @@
 import Levenshtein
 
 def normalized_levenshtein(s1, s2):
+    s1, s2 = s1.lower(), s2.lower()
     len_s1, len_s2 = len(s1), len(s2)
     distance = Levenshtein.distance(s1, s2)
     return distance / max(len_s1, len_s2)
@@ -18,8 +19,10 @@ def average_normalized_levenshtein_similarity(ground_truth, predicted_answers):
     for i in range(N):
         a_i = ground_truth[i]  
         o_q_i = predicted_answers[i]
-        max_score = max(similarity_score(a_ij, o_q_i) for a_ij in a_i)
-
+        try:
+            max_score = max(similarity_score(a_ij, o_q_i) for a_ij in a_i)
+        except ValueError:
+            max_score = 0.0
         total_score += max_score
 
     return total_score / N
