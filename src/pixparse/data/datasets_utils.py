@@ -37,9 +37,10 @@ class CustomVQADataset(Dataset):
         if split == "test" or split == "val":
             json_path = os.path.join(root_dir, split, f"{split}_v1.0.json")
         elif split == "train+val":
-            json_path = os.path.join(root_dir, split, f"processed_{split}_v1.0.json")
+            json_path = os.path.join(root_dir, split, f"full_trainval_data.json")
         elif split == "train":
-            json_path = os.path.join(root_dir, split, f"processed_{split}_v1.0.json")
+            #json_path = os.path.join(root_dir, split, f"processed_{split}_v1.0.json")
+            json_path = os.path.join(root_dir, split, f"{split}_v1.0.json")
         assert os.path.isdir(self.root_dir), f"Can't find {root_dir}. Make sure you have DocVQA files locally."
         assert os.path.isfile(json_path), f"{json_path} not found. Make sure you have the processed dataset."
         self.img_dir = os.path.join(root_dir, split)
@@ -48,11 +49,20 @@ class CustomVQADataset(Dataset):
             self.data_dict = json.load(f)
         #self.all_images = list(self.data_dict.keys())
         self.transform = transform
-        if split == "train":
+        if split in ["train", "train+val"]:
+            self.train_data = []
+            for element in self.data_dict['data']:
+                image_id = element["image"]
+                question = element["question"]
+                answer = element["answers"][0] # We take the first answer
+                qa = "<s_question>" + question + "</s_question><s_answer>" + answer + "</s_answer>"
+                self.train_data.append([image_id, qa])
+            """
             self.train_data = []
             for image_id, qas in self.data_dict.items():
                 for qa in qas:
                     self.train_data.append([image_id, qa])
+            """
         elif split == "train+val":
             self.train_data = self.data_dict
     
