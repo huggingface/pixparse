@@ -22,11 +22,14 @@ from pixparse.utils.metrics import average_normalized_levenshtein_similarity
 
 from transformers import DonutProcessor, VisionEncoderDecoderModel
 from transformers import (
+    AutoTokenizer,
     MBartConfig,
     MBartForCausalLM,
     XLMRobertaTokenizer,
     XLMRobertaTokenizerFast,
     MBartTokenizer,
+    BartTokenizer,
+    BartTokenizerFast
 )
 
 
@@ -71,11 +74,54 @@ class TaskCrullerEvalDOCVQACfg(TaskEvalCfg):
 class DonutTokenizer(nn.Module):
     def __init__(self):
         super().__init__()
-        self.trunk = XLMRobertaTokenizerFast.from_pretrained(
+        
+        """self.trunk = XLMRobertaTokenizer.from_pretrained(
                 "hyunwoongko/asian-bart-ecjk"
             )
-        #self.trunk = MBartTokenizer.from_pretrained("hyunwoongko/asian-bart-ecjk")
+        """
 
+        
+        """
+        self.trunk = XLMRobertaTokenizerFast.from_pretrained(
+                "hyunwoongko/asian-bart-ecjk"
+            ) # handles spaces sort of, and adds weird tokens ion>What is the date when the approval form was filled ?</s_question><s_answer>▁june▁7,▁1988ko_KR</s>
+            # off by one error?
+ 
+        """ 
+        
+        
+        
+        self.trunk = XLMRobertaTokenizerFast.from_pretrained(
+                "naver-clova-ix/donut-base-finetuned-docvqa"
+            ) # Good answers but misses whitespaces, probably same as AutoTokenizer
+            
+        
+        #self.trunk = AutoTokenizer.from_pretrained("naver-clova-ix/donut-base-finetuned-docvqa") # Good answers but misses whitespaces
+        #self.trunk = MBartTokenizer.from_pretrained("hyunwoongko/asian-bart-ecjk") # adds a bunch of de_DE ko_KR, etc
+        #self.trunk = BartTokenizer.from_pretrained("hyunwoongko/asian-bart-ecjk") # NOT WORKING
+
+def resize_bart_abs_pos_emb(weight: torch.Tensor, max_length: int) -> torch.Tensor:
+    """
+    Resize position embeddings
+    Truncate if sequence length of Bart backbone is greater than given max_length,
+    else interpolate to max_length
+    """
+    breakpoint()
+    if weight.shape[0] > max_length:
+        weight = weight[:max_length, ...]
+    else:
+        weight = (
+            F.interpolate(
+                weight.permute(1, 0).unsqueeze(0),
+                size=max_length,
+                mode="linear",
+                align_corners=False,
+            )
+            .squeeze(0)
+            .permute(1, 0)
+        )
+    breakpoint()
+    return weight
 
 class TaskCrullerEvalDOCVQA(TaskEval):
     """Simple task to evaluate donut on FUNSD data and get metrics in similar format as Cruller."""
@@ -103,7 +149,11 @@ class TaskCrullerEvalDOCVQA(TaskEval):
         self.prompt_end_token = "<s_answer>"
         self.max_position_embeddings = cfg.model.text_decoder.max_length
         self.text_anno_fn = True  # set for image-text dataset experiments
+        
+        self.resize_embeddings = False
+        self.max_length = 128
         self.eval_donut = True
+
         if self.eval_donut:
             self.tokenizer = DonutTokenizer()
         else:
@@ -111,6 +161,8 @@ class TaskCrullerEvalDOCVQA(TaskEval):
 
         self.state_dict = OrderedDict()
         self.resume = False
+        
+
 
         if self.eval_donut:
             docvqa_finetune_tokens = [
@@ -165,6 +217,17 @@ class TaskCrullerEvalDOCVQA(TaskEval):
             if newly_added_num > 0:
                 self.model.decoder.resize_token_embeddings(len(self.tokenizer.trunk))
 
+
+            # move around positional embeddings depending on max_length
+            if self.resize_embeddings:  # if max_length of trained model differs max_length you want to train
+                self.model.decoder.model.decoder.embed_positions.weight = torch.nn.Parameter(
+                    resize_bart_abs_pos_emb(
+                        self.model.decoder.model.decoder.embed_positions.weight,
+                        self.max_length
+                        + 2,  # https://github.com/huggingface/transformers/blob/v4.11.3/src/transformers/models/mbart/modeling_mbart.py#L118-L119
+                    )
+                )
+                self.max_position_embeddings = self.max_length
         else:
             self.model = Cruller(
                 cfg.model
@@ -194,6 +257,17 @@ class TaskCrullerEvalDOCVQA(TaskEval):
                     len(self.tokenizer.trunk)
                 )
 
+
+            if self.resize_embeddings:  # if max_length of trained model differs max_length you want to train
+                self.model.text_decoder.trunk.model.decoder.embed_positions.weight = torch.nn.Parameter(
+                    resize_bart_abs_pos_emb(
+                        self.model.text_decoder.trunk.model.decoder.embed_positions.weight,
+                        self.max_length
+                        + 2,  # https://github.com/huggingface/transformers/blob/v4.11.3/src/transformers/models/mbart/modeling_mbart.py#L118-L119
+                    )
+                )
+                self.max_position_embeddings = self.max_length
+
         # ------
         self.loss = nn.CrossEntropyLoss(ignore_index=-100)
         self.has_no_sync = False
@@ -212,12 +286,12 @@ class TaskCrullerEvalDOCVQA(TaskEval):
 
         self.img_mean = (
             sum(img_mean) / len(img_mean)
-            if cfg.model.image_encoder.image_fmt == "L"
+            if cfg.model.image_encoder.image_fmt == "L" and not self.eval_donut
             else img_mean
         )
         self.img_std = (
             sum(img_std) / len(img_std)
-            if cfg.model.image_encoder.image_fmt == "L"
+            if cfg.model.image_encoder.image_fmt == "L" and not self.eval_donut
             else img_std
         )
 
@@ -229,7 +303,7 @@ class TaskCrullerEvalDOCVQA(TaskEval):
         else:
             image_size = cfg.model.image_encoder.image_size
             color_transform = transforms.Grayscale()
-
+        print(self.img_mean, self.img_std)
         self.image_preprocess_eval = transforms.Compose(
             [
                 transforms.ToTensor(),
@@ -252,9 +326,35 @@ class TaskCrullerEvalDOCVQA(TaskEval):
     def setup(self):
         device = self.device_env.device
         if self.eval_donut:
-            pass  # We directly load the model we want to evaluate
-        else:
-            self.model.load_state_dict(self.resume_state_dict)
+            pass  # We directly load the model we want to evaluate        
+        else: 
+            if not self.resize_embeddings:
+                # load the state dict as is
+                self.model.load_state_dict(self.resume_state_dict)
+            else:
+                breakpoint()
+                initial_state_dict = self.model.state_dict()
+                new_state_dict = self.resume_state_dict
+                for x in new_state_dict:
+                    if x.endswith("embed_positions.weight") and self.max_position_embeddings != 1024:
+                        breakpoint()
+                        new_state_dict[x] = torch.nn.Parameter(
+                            resize_bart_abs_pos_emb(
+                                initial_state_dict[x],
+                                self.max_position_embeddings
+                                + 2,  # https://github.com/huggingface/transformers/blob/v4.11.3/src/transformers/models/mbart/modeling_mbart.py#L118-L119
+                            )
+                        )
+                    elif x.endswith("embed_tokens.weight") or x.endswith("lm_head.weight"):
+                        new_state_dict[x] = initial_state_dict[x][: len(self.tokenizer.trunk), :]
+                    else:
+                        new_state_dict[x] = initial_state_dict[x]
+                breakpoint()
+                self.model.load_state_dict(new_state_dict)
+
+
+
+
         self.model.eval()
         self.model.to(device)
         self.all_ground_truths = []
@@ -367,10 +467,11 @@ class TaskCrullerEvalDOCVQA(TaskEval):
         metrics = {}
         if self.eval_donut:
             image_input = batch["images"]
-            rgb_batch_tensor = image_input.expand(-1, 3, -1, -1)
-            image_outputs = self.model.encoder(
-                rgb_batch_tensor.to(self.device_env.device)
-            )
+            image_outputs = self.model.encoder(image_input.to(self.device_env.device))
+            #rgb_batch_tensor = image_input.expand(-1, 3, -1, -1)
+            #image_outputs = self.model.encoder(
+            #    rgb_batch_tensor.to(self.device_env.device)
+            #)
             image_outputs = image_outputs.last_hidden_state
         else:
             image_outputs = self.model.image_encoder(
@@ -392,17 +493,11 @@ class TaskCrullerEvalDOCVQA(TaskEval):
                     + "</s_question>"
                     + "<s_answer>"
                 )
-                input_ids = (
-                    torch.tensor(
-                        self.tokenizer.trunk.encode(
-                            current_string, add_special_tokens=False
-                        )
-                    )
-                    .unsqueeze(0)
-                    .to(self.device_env.device)
-                )  # Adding extra dimension for batch
+                input_ids = self.tokenizer.trunk.encode(current_string, add_special_tokens=False, return_tensors="pt").to(self.device_env.device)
+                # Adding extra dimension for batch
                 # generate output
-                max_steps = 512  # maximum number of steps
+                max_steps = 128  # maximum number of steps
+
 
                 for step in range(max_steps):
                     inputs = self.prepare_inputs_for_inference(
@@ -432,15 +527,8 @@ class TaskCrullerEvalDOCVQA(TaskEval):
                     if next_token == "</s>":
                         break
 
-                    input_ids = (
-                        torch.tensor(
-                            self.tokenizer.trunk.encode(
-                                current_string, add_special_tokens=False
-                            )
-                        )
-                        .unsqueeze(0)
-                        .to(self.device_env.device)
-                    )
+                    input_ids = self.tokenizer.trunk.encode(current_string, add_special_tokens=False, return_tensors="pt").to(self.device_env.device)
+                    breakpoint()
 
                 predicted_json = token2json(current_string)
                 if "answer" in predicted_json:
