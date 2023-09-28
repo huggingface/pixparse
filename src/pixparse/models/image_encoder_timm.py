@@ -9,6 +9,12 @@ def create_image_encoder(cfg: ImageEncoderCfg) -> nn.Module:
     extra_kwargs = {}
     if cfg.image_size is not None:
         extra_kwargs['img_size'] = cfg.image_size
+    if cfg.patch_size is not None:
+        extra_kwargs['patch_size'] = cfg.patch_size
+    if cfg.window_size is not None:
+        extra_kwargs['window_size'] = cfg.window_size
+
+
     assert cfg.image_fmt in ('L', 'RGB')
     model = timm.create_model(
         cfg.name,

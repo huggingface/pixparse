@@ -18,6 +18,8 @@ class ImageEncoderCfg(Serializable):
     image_fmt: str = 'L'
     image_size: Optional[Tuple[int, int]] = (576, 448)
     pretrained: bool = True
+    patch_size: Optional[int] = None
+    window_size: Optional[int] = None
 
 
 @dataclass
