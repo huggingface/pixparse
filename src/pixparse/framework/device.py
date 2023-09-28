@@ -164,3 +164,8 @@ class DeviceEnv:
         objects = [None for _ in range(self.world_size)]
         dist.all_gather_object(objects, obj)
         return objects
+
+    def get_world_process_group(self):
+        if dist.is_initialized():
+            return dist.group.WORLD
+        return None
