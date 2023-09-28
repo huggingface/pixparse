@@ -13,12 +13,16 @@ from pixparse.data import DataCfg, create_loader
 from pixparse.framework import DeviceEnv, Monitor, train_one_interval, evaluate, setup_logging, random_seed, TaskTrain, TaskTrainCfg
 from pixparse.utils.name_utils import clean_name
 from pixparse.utils.s3_utils import load_checkpoint_from_s3
+from pixparse.utils.s3_mover import S3Mover
 from pixparse.task import TaskFactory
 
 from chug.common import LoaderBundle
 from chug.webdataset import create_doc_anno_pipe
 
 from collections import OrderedDict
+
+import torch.distributed as dist
+
 _logger = logging.getLogger('train')
 
 
@@ -51,6 +55,7 @@ def train(
 ):
     device_env = task.device_env
     train_loader = loaders['train']
+
     for i in range(task.start_interval, task.num_intervals):
         # FIXME flatten interval loop to have one eval point
         #  i.e step intervals vs epoch intervals handled similarly?
@@ -58,13 +63,29 @@ def train(
         train_one_interval(
             task,
             train_loader,
+            interval=i
         )
-
         # save checkpoint
+        checkpoint_dir = os.path.join(cfg.output_checkpoint_dir, cfg.experiment)
+        os.makedirs(checkpoint_dir, exist_ok=True)
         if device_env.is_primary():
-            checkpoint_dir = os.path.join(cfg.output_checkpoint_dir, cfg.experiment)
-            os.makedirs(checkpoint_dir, exist_ok=True)
-            torch.save(task.model.state_dict(), os.path.join(checkpoint_dir, f'checkpoint-{i}.pt'))
+            s3_mover = S3Mover(local_path=checkpoint_dir,
+                s3_path=os.path.join("s3://pixparse-exps/", cfg.experiment),
+                remove_after_upload=True,
+                s5cmd_numworkers=12,
+                s5cmd_concurrency=10,
+                s5cmd_path="/fsx/pablo/anaconda3/envs/pp201timm098/bin/s5cmd",
+                )
+            s3_mover.update()
+            world_process_group = device_env.get_world_process_group()
+            s3_mover.distributed_wait_for_completion(dist, world_process_group)
+            checkpoint = {
+                'interval': i,
+                'state_dict': task.model.state_dict(),
+                'optimizer': task.optimizer.state_dict()
+            }
+            torch.save(checkpoint, os.path.join(checkpoint_dir, f'checkpoint-{i}.pt'))
+            s3_mover.start_uploading()
 
 
 parser = ArgumentParser(

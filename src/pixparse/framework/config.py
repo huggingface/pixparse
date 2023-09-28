@@ -25,7 +25,7 @@ class OptimizationCfg:
 class TaskTrainCfg:
     num_intervals: int = 100
     num_warmup_intervals: int = 5
-    eval_frequency: int = 1000 
+    eval_frequency: int = 500 
     opt: OptimizationCfg = field(default_factory=OptimizationCfg)
     dtype: Optional[str] = None
     amp: bool = True
