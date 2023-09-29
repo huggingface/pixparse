@@ -26,7 +26,8 @@ def get_ocr_metrics(
         prompt_token: Cue token for decoding task.
 
     Returns:
-        A tuple of two dictionaries containing OCR metrics and a reconstructed sample, or None if all decoded texts or OCR predictions are empty.
+        A tuple of two dictionaries containing OCR metrics and a reconstructed sample,
+        or None if all decoded texts or OCR predictions are empty.
     """
     cer_transforms = tr.Compose(
         [
@@ -55,9 +56,9 @@ def get_ocr_metrics(
         text_input[
             text_input == -100
         ] = (
-            tokenizer.trunk.pad_token_id
+            tokenizer.pad_token_id
         )  # FIXME the -100 id token is there to be ignored by cross entropy, we replace it by padding
-        sequence_lengths = (text_input != tokenizer.trunk.pad_token_id).sum(dim=1)
+        sequence_lengths = (text_input != tokenizer.pad_token_id).sum(dim=1)
         max_sequence_length = sequence_lengths.max().item()
         max_recursion_length = min(max_recursion_length, max_sequence_length)
         ocr_predictions = generate_ocr(
@@ -68,7 +69,7 @@ def get_ocr_metrics(
             max_recursion_length,
             prompt_token,
         )
-        decoded_texts = tokenizer.trunk.batch_decode(text_input)
+        decoded_texts = tokenizer.batch_decode(text_input)
         ocr_predictions = [
             re.sub(r"<.*?>", "", re.sub("\n", " ", text)) for text in ocr_predictions
         ]
@@ -157,7 +158,7 @@ def generate_ocr(
             model, tokenizer, encoder_outputs, device_env, max_recursion_length, prompt_token
         )
         generated_texts = [
-            tokenizer.trunk.decode(text) for text in generated_tokens.tolist()
+            tokenizer.decode(text) for text in generated_tokens.tolist()
         ]
     return generated_texts
 
@@ -168,7 +169,7 @@ def get_generated_tokens(
     """
     # TODO This "hacky" function should eventually be replaced by .generate() from GenerationMixin that does the same thing.
     """
-    task_pretrain_token_id = tokenizer.trunk.encode(prompt_token, add_special_tokens=False)[0]
+    task_pretrain_token_id = tokenizer.encode(prompt_token, add_special_tokens=False)[0]
 
     input_ids = torch.full(
         (encoder_outputs.shape[0], 1), task_pretrain_token_id
@@ -177,13 +178,13 @@ def get_generated_tokens(
     finished_samples = torch.zeros(input_ids.shape[0], dtype=torch.bool).to(
         device_env.device
     )
-    eos_token_id = torch.tensor(tokenizer.trunk.eos_token_id).to(device_env.device)
+    eos_token_id = torch.tensor(tokenizer.eos_token_id).to(device_env.device)
 
     for recursion_length in range(0, max_recursion_length):
         inputs = model.text_decoder.prepare_inputs_for_inference(
             input_ids=input_ids,
             encoder_outputs=encoder_outputs,
-            pad_token_id=tokenizer.trunk.pad_token_id,
+            pad_token_id=tokenizer.pad_token_id,
         )
 
         outputs = model.text_decoder.forward(**inputs)

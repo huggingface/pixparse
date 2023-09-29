@@ -1,4 +1,5 @@
 import logging
+import time
 from dataclasses import dataclass, field
 from functools import partial
 from typing import Optional
@@ -6,18 +7,15 @@ from typing import Optional
 import torch
 import torchvision.transforms as transforms
 
-
 from pixparse.framework import TaskEvalCfg, TaskEval, DeviceEnv, Monitor
 from pixparse.models import Cruller, ModelCfg, get_model_config
-from pixparse.tokenizers import TokenizerHF, TokenizerCfg
+from pixparse.tokenizers import create_tokenizer, TokenizerCfg
 from pixparse.data import preprocess_text_anno
 from pixparse.utils import get_ocr_metrics
 
 from chug.common import LoaderBundle
 
 _logger = logging.getLogger(__name__)
-
-import time
 
 
 @dataclass
@@ -51,7 +49,6 @@ class TaskCrullerEvalOCR(TaskEval):
     * First evaluation task, pull out bits of code and refactor as needed over time
     * should be adaptable to several datasets as long as they are formatted correctly?
      Or do we impose datasets specific to this eval task? makes more sense maybe
-    * Eval_step() is the singular method to accumulate metrics
     """
 
     def __init__(
@@ -80,22 +77,22 @@ class TaskCrullerEvalOCR(TaskEval):
         self.prompt_end_token = self.task_start_token
         self.max_position_embeddings = cfg.model.text_decoder.max_length
         self.text_anno_fn = True
-        self.tokenizer = TokenizerHF(cfg.tokenizer)
+        self.tokenizer = create_tokenizer(cfg.tokenizer)
         special_tokens = [
             "<sep/>",  # JSON list separator
             self.task_start_token,  # task start (based on dataset/task)
             self.prompt_end_token,  # prompt end (or task_start for pretrain)
         ]
-        newly_added_num = self.tokenizer.trunk.add_special_tokens(
+        newly_added_num = self.tokenizer.add_special_tokens(
             {"additional_special_tokens": sorted(set(special_tokens))}
         )
 
-        self.vocab_size = len(self.tokenizer.trunk)
+        self.vocab_size = len(self.tokenizer)
 
         preproc_fn = preprocess_text_anno
         self.anno_preprocess_eval = partial(
             preproc_fn,
-            tokenizer=self.tokenizer.trunk,
+            tokenizer=self.tokenizer,
             max_position_embeddings=self.max_position_embeddings,
             task_start_token=self.task_start_token,
             prompt_end_token=self.prompt_end_token,
@@ -106,7 +103,7 @@ class TaskCrullerEvalOCR(TaskEval):
         # We need to resize the token embeddings after the model has been initialized
         if newly_added_num > 0:
             self.model.text_decoder.trunk.resize_token_embeddings(
-                len(self.tokenizer.trunk)
+                len(self.tokenizer)
             )
 
         self.has_no_sync = False

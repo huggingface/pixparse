@@ -10,6 +10,8 @@ from timm.data.transforms import CenterCropOrPad
 from timm.data.constants import IMAGENET_DEFAULT_MEAN, IMAGENET_DEFAULT_STD
 import numpy as np
 
+from .config import ImageInputCfg
+
 try:
     import albumentations as alb
     from albumentations.pytorch import ToTensorV2
@@ -26,10 +28,8 @@ except ImportError:
 
 def create_transforms(
         name,
-        image_size,
+        input_cfg: ImageInputCfg,
         training=True,
-        image_mean=IMAGENET_DEFAULT_MEAN,
-        image_std=IMAGENET_DEFAULT_STD,
         interpolation: str = 'bicubic',
         crop_margin: bool = False,
         align_long_axis: bool = False,
@@ -38,8 +38,7 @@ def create_transforms(
     # FIXME design a config class to cover coarse and fine-grained aug options
     basic_args = dict(
         training=training,
-        image_mean=image_mean,
-        image_std=image_std
+        input_cfg=input_cfg,
     )
     adv_args = dict(
         interpolation=interpolation,
@@ -48,45 +47,42 @@ def create_transforms(
         fill=fill,
     )
     if name == 'better':
-        return better_transforms(image_size, **basic_args, **adv_args)
+        return better_transforms(**basic_args, **adv_args)
     elif name == 'nougat':
-        return nougat_transforms(image_size, **basic_args, **adv_args)
+        return nougat_transforms(**basic_args, **adv_args)
     else:
-        return legacy_transforms(image_size, **basic_args)
+        return legacy_transforms(**basic_args)
 
 
 def legacy_transforms(
-        image_size,
-        image_mean,
-        image_std,
+        input_cfg: ImageInputCfg,
         training=False,
 ):
     # super basic and not so good initial transform for PoC runs
     pp = transforms.Compose([
         transforms.Resize(
-            image_size,
+            input_cfg.image_size,
             interpolation=transforms.InterpolationMode.BICUBIC,
             antialias=True),
         transforms.ToTensor(),
         transforms.Normalize(
-            mean=image_mean,
-            std=image_std,
+            mean=input_cfg.image_mean,
+            std=input_cfg.image_std,
         )
     ])
     return pp
 
 
 def better_transforms(
-        image_size,
+        input_cfg: ImageInputCfg,
         training=True,
-        image_mean=IMAGENET_DEFAULT_MEAN,
-        image_std=IMAGENET_DEFAULT_STD,
         interpolation='bicubic',
         crop_margin=False,
         align_long_axis=False,
         fill=255,
 ):
     # an improved torchvision + custom op transforms (no albumentations)
+    image_size = input_cfg.image_size
     interpolation_mode = timm.data.transforms.str_to_interp_mode(interpolation)
 
     pp = []
@@ -165,17 +161,15 @@ def better_transforms(
 
     pp += [
         transforms.ToTensor(),
-        transforms.Normalize(image_mean, image_std),
+        transforms.Normalize(input_cfg.image_mean, input_cfg.image_std),
     ]
 
     return transforms.Compose(pp)
 
 
 def nougat_transforms(
-        image_size,
+        input_cfg: ImageInputCfg,
         training=True,
-        image_mean=IMAGENET_DEFAULT_MEAN,
-        image_std=IMAGENET_DEFAULT_STD,
         align_long_axis=False,
         interpolation='bicubic',
         fill=255,
@@ -184,6 +178,7 @@ def nougat_transforms(
     assert has_albumentations, 'Albumentations and CV2 needed to use nougat transforms.'
 
     # albumentations + custom opencv transforms from nougat
+    image_size = input_cfg.image_size
     if interpolation == 'bilinear':
         interpolation_mode = 1
     else:
@@ -251,7 +246,7 @@ def nougat_transforms(
         ]
 
     alb_pp += [
-        alb.Normalize(image_mean, image_std),
+        alb.Normalize(input_cfg.image_mean, input_cfg.image_std),
         alb.pytorch.ToTensorV2(),
     ]
     tv_pp += [alb_wrapper(alb.Compose(alb_pp))]

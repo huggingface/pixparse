@@ -21,7 +21,7 @@ from pixparse.framework import (
 )
 from pixparse.utils.s3_utils import load_checkpoint_from_s3
 
-from pixparse.task.task_factory import TaskFactory
+from pixparse.task.task_registry import TaskFactory
 
 from chug.webdataset import create_doc_anno_pipe, create_image_text_pipe
 

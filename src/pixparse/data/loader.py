@@ -2,12 +2,10 @@ from typing import Callable
 
 from chug import create_wds_loader, create_doc_anno_pipe
 from chug.common import LoaderBundle
-from datasets import VerificationMode
-from datasets import load_dataset
 from torch.utils.data import DataLoader, DistributedSampler
 
 from pixparse.data.datasets_utils import SafeDataset, CustomVQADataset
-from .config import DatasetCfg
+from .config import DataCfg
 
 
 class GenericLoader(DataLoader):
@@ -22,7 +20,7 @@ class GenericLoader(DataLoader):
 
 
 def create_loader(
-    cfg: DatasetCfg,
+    cfg: DataCfg,
     is_train: bool,
     image_preprocess,
     anno_preprocess,
@@ -34,12 +32,12 @@ def create_loader(
     world_size: int = 1,
     global_rank: int = 0,
     create_decoder_pipe: Callable = create_doc_anno_pipe,
-):
+) -> LoaderBundle:
     """
     Creates a dataloader for training or validation based on configuration settings.
 
     Parameters:
-        cfg (DatasetCfg): Configuration object for the dataset.
+        cfg (DataCfg): Configuration object for the dataset.
         is_train (bool): Indicates if the loader is for training data (True) or validation data (False).
         collate_fn (Callable): Collate function to be used in loader. 
         image_preprocess (Callable): Image preprocessing sequence.
@@ -78,6 +76,9 @@ def create_loader(
             world_size=world_size,
         )
     elif cfg.format == "hf_dataset":
+        from datasets import VerificationMode
+        from datasets import load_dataset
+
         # In the case of hf datasets, we use the collator defined at task level
         if cfg.source == "SinglePageDocVQA":
             dataset = CustomVQADataset(

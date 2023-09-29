@@ -1,6 +1,10 @@
 import torch
-import boto3
+try:
+    import boto3
+except ImportError:
+    boto3 = None
 from io import BytesIO
+
 
 def load_checkpoint_from_s3(bucket_name: str, s3_file_key: str):
     s3 = boto3.client('s3')

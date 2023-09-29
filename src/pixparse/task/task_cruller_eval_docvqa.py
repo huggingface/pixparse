@@ -14,14 +14,10 @@ from torchvision import transforms
 from pixparse.data import preprocess_ocr_anno, preprocess_text_anno
 from pixparse.framework import (DeviceEnv, Monitor, TaskEval, TaskEvalCfg)
 from pixparse.models import Cruller, ModelCfg, get_model_config
-from pixparse.tokenizers import TokenizerCfg, TokenizerHF
+from pixparse.tokenizers import TokenizerCfg, create_tokenizer
 from pixparse.utils.json_utils import json2token, token2json
 from pixparse.utils.json_utils import JSONParseEvaluator
 from pixparse.utils.metrics import average_normalized_levenshtein_similarity
-
-import numpy as np
-
-from ast import literal_eval
 
 _logger = logging.getLogger(__name__)
 
@@ -51,6 +47,7 @@ class TaskCrullerEvalDOCVQACfg(TaskEvalCfg):
         else:
             self.model_name = "custom"
 
+
 class TaskCrullerEvalDOCVQA(TaskEval):
     """Simple task to evaluate donut on FUNSD data and get metrics in similar format as Cruller."""
 
@@ -77,7 +74,7 @@ class TaskCrullerEvalDOCVQA(TaskEval):
         self.prompt_end_token = "<s_answer>"
         self.max_position_embeddings = cfg.model.text_decoder.max_length
         self.text_anno_fn = True  # set for image-text dataset experiments
-        self.tokenizer = TokenizerHF(cfg.tokenizer)
+        self.tokenizer = create_tokenizer(cfg.tokenizer)
 
         self.state_dict = OrderedDict()
         self.resume = False
@@ -99,7 +96,7 @@ class TaskCrullerEvalDOCVQA(TaskEval):
         preproc_fn = preprocess_text_anno if self.text_anno_fn else preprocess_ocr_anno
         self.anno_preprocess_eval = partial(
             preproc_fn,
-            tokenizer=self.tokenizer.trunk,
+            tokenizer=self.tokenizer,
             max_position_embeddings=self.max_position_embeddings,
             task_start_token=self.task_start_token,
             prompt_end_token=self.prompt_end_token,
@@ -109,31 +106,30 @@ class TaskCrullerEvalDOCVQA(TaskEval):
 
         # ---- Add pretraining tokens
 
-        newly_added_num_from_pretrain = self.tokenizer.trunk.add_special_tokens(
+        newly_added_num_from_pretrain = self.tokenizer.add_special_tokens(
             {"additional_special_tokens": sorted(set(special_tokens_from_pretrain))}
         )
-
 
         # need to resize embeddings from pretrained model in order to load it
         if newly_added_num_from_pretrain > 0:
             self.model.text_decoder.trunk.resize_token_embeddings(
-                len(self.tokenizer.trunk)
+                len(self.tokenizer)
             )
 
         # ---- Add finetuning tokens
 
-        newly_added_num = self.tokenizer.trunk.add_special_tokens(
+        newly_added_num = self.tokenizer.add_special_tokens(
             {"additional_special_tokens": sorted(set(docvqa_finetune_tokens))}
         )
-        self.vocab_size = len(self.tokenizer.trunk)
+        self.vocab_size = len(self.tokenizer)
 
         # We resize token embeddings after initializing
         if newly_added_num > 0:
             self.model.text_decoder.trunk.resize_token_embeddings(
-                len(self.tokenizer.trunk)
+                len(self.tokenizer)
             )
 
-# ------ 
+        # ------
         self.loss = nn.CrossEntropyLoss(ignore_index=-100)
         self.has_no_sync = False
         self.num_image_chs = 1 if cfg.model.image_encoder.image_fmt == "L" else 3
@@ -186,7 +182,6 @@ class TaskCrullerEvalDOCVQA(TaskEval):
 
         self.evaluator = JSONParseEvaluator()
 
-
     def prepare_inputs_for_inference(
         self,
         input_ids: torch.Tensor,
@@ -198,7 +193,7 @@ class TaskCrullerEvalDOCVQA(TaskEval):
     ):
         if past is not None:
             past_key_values = past
-        attention_mask = input_ids.ne(self.tokenizer.trunk.pad_token_id).long()
+        attention_mask = input_ids.ne(self.tokenizer.pad_token_id).long()
         if past_key_values is not None:
             input_ids = input_ids[:, -1:]
         output = {
@@ -220,7 +215,6 @@ class TaskCrullerEvalDOCVQA(TaskEval):
         return loaders
         # return loaders_and_tasks
 
-
     def safe_image_transform(self, img):
         try:
             transformed_img = self.image_preprocess_eval(img)
@@ -232,9 +226,9 @@ class TaskCrullerEvalDOCVQA(TaskEval):
     def text_input_to_target(self, text_input, ignore_id=-100):
         target = text_input.clone()
         # model doesn't need to predict pad token
-        target[target == self.tokenizer.trunk.pad_token_id] = ignore_id
+        target[target == self.tokenizer.pad_token_id] = ignore_id
         # model doesn't need to predict prompt (for VQA)
-        prompt_end_token_id = self.tokenizer.trunk.convert_tokens_to_ids(
+        prompt_end_token_id = self.tokenizer.convert_tokens_to_ids(
             self.prompt_end_token
         )
         slice_id = torch.nonzero(target == prompt_end_token_id).sum() + 1
@@ -265,7 +259,6 @@ class TaskCrullerEvalDOCVQA(TaskEval):
             "question_ids": question_ids,
         }
 
-
     def step(self, batch):
         """
         Does one step of evaluation for DOCVQA. 
@@ -278,7 +271,7 @@ class TaskCrullerEvalDOCVQA(TaskEval):
             with torch.inference_mode():           
                 # split out answer from prompt
                 current_string = self.task_start_token + "<s_question>" + question + "</s_question>" + "<s_answer>" 
-                input_ids = torch.tensor(self.tokenizer.trunk.encode(current_string, add_special_tokens=False)).unsqueeze(0).to(self.device_env.device)  # Adding extra dimension for batch
+                input_ids = torch.tensor(self.tokenizer.encode(current_string, add_special_tokens=False)).unsqueeze(0).to(self.device_env.device)  # Adding extra dimension for batch
                 max_steps = 512  # maximum number of steps
 
                 for step in range(max_steps):
@@ -289,13 +282,13 @@ class TaskCrullerEvalDOCVQA(TaskEval):
                     probabilities = F.softmax(decoder_outputs['logits'], dim=-1)
                     next_token_id = torch.argmax(probabilities[0, -1]).item()  # Just get the last token for the single sample
                     
-                    next_token = self.tokenizer.trunk.decode([next_token_id])
+                    next_token = self.tokenizer.decode([next_token_id])
                     current_string += next_token
 
                     if next_token == "</s>":
                         break
 
-                    input_ids = torch.tensor(self.tokenizer.trunk.encode(current_string, add_special_tokens=False)).unsqueeze(0).to(self.device_env.device)
+                    input_ids = torch.tensor(self.tokenizer.encode(current_string, add_special_tokens=False)).unsqueeze(0).to(self.device_env.device)
 
                 predicted_json = token2json(current_string)
             if 'answer' in predicted_json:

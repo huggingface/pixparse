@@ -19,7 +19,7 @@ from timm.scheduler import create_scheduler_v2
 
 from pixparse.framework import TaskTrainCfg, TaskTrain, DeviceEnv, Monitor
 from pixparse.models import Cruller, ModelCfg, get_model_config
-from pixparse.tokenizers import TokenizerHF, TokenizerCfg
+from pixparse.tokenizers import create_tokenizer, TokenizerCfg
 from pixparse.data import preprocess_ocr_anno, preprocess_text_anno
 from timm.layers import SelectAdaptivePool2d
 
@@ -29,7 +29,6 @@ from collections import OrderedDict
 
 from ast import literal_eval
 
-from datasets import load_dataset
 from pixparse.utils.json_utils import json2token, token2json
 from transformers import DonutProcessor, VisionEncoderDecoderModel
 
@@ -63,6 +62,7 @@ class TaskCrullerFinetuneCORDCfg(TaskTrainCfg):
         else:
             self.model_name = "custom"
 
+
 def prepare_inputs_for_inference(
     tokenizer,
     input_ids: torch.Tensor,
@@ -74,7 +74,7 @@ def prepare_inputs_for_inference(
 ):
     if past is not None:
         past_key_values = past
-    attention_mask = input_ids.ne(tokenizer.trunk.pad_token_id).long()
+    attention_mask = input_ids.ne(tokenizer.pad_token_id).long()
     if past_key_values is not None:
         input_ids = input_ids[:, -1:]
     output = {
@@ -85,6 +85,7 @@ def prepare_inputs_for_inference(
         "encoder_hidden_states": encoder_outputs,  # .last_hidden_state,
     }
     return output
+
 
 class TaskCrullerFinetuneCORD(TaskTrain):
     def __init__(
@@ -98,7 +99,6 @@ class TaskCrullerFinetuneCORD(TaskTrain):
             device_env=device_env,
             monitor=monitor,
         )
-        self.cfg = cfg
         # NOTE dtype is currently being used as 'amp dtype' only, ie the low precision type,
         #  we may want to differentiate different precision modes such as
         #  amp + dtype, pure float16/bfloat16, custom mixed prec, etc
@@ -112,7 +112,7 @@ class TaskCrullerFinetuneCORD(TaskTrain):
         self.prompt_end_token = self.task_start_token
         self.max_position_embeddings = cfg.model.text_decoder.max_length
         self.text_anno_fn = True  # set for image-text dataset experiments
-        self.tokenizer = TokenizerHF(cfg.tokenizer)
+        self.tokenizer = create_tokenizer(cfg.tokenizer)
 
         self.state_dict = OrderedDict()
         self.resume = False
@@ -181,24 +181,17 @@ class TaskCrullerFinetuneCORD(TaskTrain):
             "<s_cnt>",
         ]
 
-
-        
-
         preproc_fn = preprocess_text_anno if self.text_anno_fn else preprocess_ocr_anno
         self.anno_preprocess_train = partial(
             preproc_fn,
-            tokenizer=self.tokenizer.trunk,
+            tokenizer=self.tokenizer,
             max_position_embeddings=self.max_position_embeddings,
             task_start_token=self.task_start_token,
             prompt_end_token=self.prompt_end_token,
         )
 
-        
         """ Commenting out to test Donut weights
-
         """
-
-
 
         self.finetune_donut_weights = False
         _logger.info(f'Finetuning donut weights? {self.finetune_donut_weights}')
@@ -213,13 +206,13 @@ class TaskCrullerFinetuneCORD(TaskTrain):
                 "<s_pretrain>",  # task start (based on dataset/task)
             ]
 
-            num_tokens_from_pretrain = self.tokenizer.trunk.add_special_tokens(
+            num_tokens_from_pretrain = self.tokenizer.add_special_tokens(
                 {"additional_special_tokens": sorted(set(special_tokens_from_pretrain))}
             )
             # need to resize embeddings from pretrained model in order to load it
             if num_tokens_from_pretrain > 0:
                 self.model.text_decoder.trunk.resize_token_embeddings(
-                    len(self.tokenizer.trunk)
+                    len(self.tokenizer)
                 )
 
         self.loss = nn.CrossEntropyLoss(ignore_index=-100)
@@ -276,7 +269,7 @@ class TaskCrullerFinetuneCORD(TaskTrain):
             ]
         )
 
-    def train_setup(
+    def setup(
         self,
         num_batches_per_interval: int,
     ):
@@ -302,29 +295,29 @@ class TaskCrullerFinetuneCORD(TaskTrain):
         #         if self.resume:
         if self.finetune_donut_weights:
             # We just add tokens, weights of donut are already initialized
-            self.newly_added_num = self.tokenizer.trunk.add_special_tokens(
+            self.newly_added_num = self.tokenizer.add_special_tokens(
                 {"additional_special_tokens": sorted(set(self.special_tokens_finetune))}
             )
-            self.vocab_size = len(self.tokenizer.trunk)
+            self.vocab_size = len(self.tokenizer)
 
             # We resize token embeddings after initializing
             if self.newly_added_num > 0:
                 self.model.decoder.resize_token_embeddings(
-                    len(self.tokenizer.trunk)
+                    len(self.tokenizer)
                 )
         else:
             _logger.info(f"Resuming from existing checkpoint. ")
             self.state_dict = {k.replace("module.", ""): v for k, v in self.state_dict.items()}
             self.model.load_state_dict(self.state_dict)
-            self.newly_added_num = self.tokenizer.trunk.add_special_tokens(
+            self.newly_added_num = self.tokenizer.add_special_tokens(
                 {"additional_special_tokens": sorted(set(self.special_tokens_finetune))}
             )
-            self.vocab_size = len(self.tokenizer.trunk)
+            self.vocab_size = len(self.tokenizer)
 
             # We resize token embeddings after initializing
             if self.newly_added_num > 0:
                 self.model.text_decoder.trunk.resize_token_embeddings(
-                    len(self.tokenizer.trunk)
+                    len(self.tokenizer)
                 )
             
         device = self.device_env.device
@@ -340,66 +333,27 @@ class TaskCrullerFinetuneCORD(TaskTrain):
             )
             self.has_no_sync = hasattr(self.model, "no_sync")
 
-        opt_kwargs = {}
-        if self.cfg.opt.betas is not None:
-            opt_kwargs["betas"] = self.cfg.opt.betas
-        if self.cfg.opt.momentum is not None:
-            opt_kwargs["momentum"] = self.cfg.opt.momentum
-
-        self.optimizer = create_optimizer_v2(
-            self.model,
-            self.cfg.opt.optimizer,
-            lr=self.cfg.opt.learning_rate,
-            eps=self.cfg.opt.eps,
-            layer_decay=self.cfg.opt.layer_decay,
-            **opt_kwargs,
+        self._setup_optimization(
+            num_batches_per_interval=num_batches_per_interval,
         )
-        #self.optimizer = torch.optim.Adam(self.model.parameters(), lr = self.cfg.opt.learning_rate)
-
-        if self.cfg.amp:
-            self.scaler = timm.utils.NativeScaler()
-            self.autocast = partial(
-                torch.autocast, device_type=device.type, dtype=self.amp_dtype
-            )
-        else:
-            self.scaler = None
-            self.autocast = nullcontext
-
-        # FIXME will need two paths here to support interval vs step based durations
-        #  in either case LR is always stepped with each optimizer update (train step)
-        self.num_steps_per_interval = (
-            num_batches_per_interval // self.cfg.opt.grad_accum_steps
-        )
-        self.scheduler, num_scheduled_epochs = create_scheduler_v2(
-            self.optimizer,
-            self.cfg.opt.scheduler,
-            warmup_lr=self.cfg.opt.warmup_learning_rate,
-            warmup_epochs=self.num_warmup_intervals,
-            num_epochs=self.num_intervals,
-            step_on_epochs=False,  # sched is stepped on updates
-            updates_per_epoch=self.num_steps_per_interval,
-        )
-        self.scheduler.step_update(0)
 
     def text_input_to_target(self, text_input, ignore_id=-100):
         target = text_input.clone()
         # model doesn't need to predict pad token
-        target[target == self.tokenizer.trunk.pad_token_id] = ignore_id
+        target[target == self.tokenizer.pad_token_id] = ignore_id
         # model doesn't need to predict prompt (for VQA)
-        prompt_end_token_id = self.tokenizer.trunk.convert_tokens_to_ids(
+        prompt_end_token_id = self.tokenizer.convert_tokens_to_ids(
             self.prompt_end_token
         )
         slice_id = torch.nonzero(target == prompt_end_token_id).sum() + 1
         target[:slice_id] = ignore_id
         return target
 
-            
-
     def collate_fn(self, batch):
         """
         basic collator for PIL images, as returned by rvlcdip dataloader (among others)
         """
-        tokenizer_fn = lambda x: self.tokenizer.trunk(
+        tokenizer_fn = lambda x: self.tokenizer(
             x,  # FIXME move this batcher/tokenizer elsewhere
             add_special_tokens=False,
             return_tensors="pt",
@@ -412,12 +366,12 @@ class TaskCrullerFinetuneCORD(TaskTrain):
         raw_texts = [literal_eval(item["ground_truth"])["gt_parse"] for item in batch]
         inputs_to_stack = []
         for text in raw_texts:
-            tokens_from_json, _ = json2token(text, self.tokenizer.trunk.all_special_tokens, sort_json_key=False)
+            tokens_from_json, _ = json2token(text, self.tokenizer.all_special_tokens, sort_json_key=False)
             inputs_to_stack.append(tokenizer_fn(
                 self.task_start_token
-                #+ self.tokenizer.trunk.bos_token
+                #+ self.tokenizer.bos_token
                 + tokens_from_json
-                + self.tokenizer.trunk.eos_token
+                + self.tokenizer.eos_token
             ))
         text_inputs = torch.stack(
             inputs_to_stack
@@ -434,7 +388,25 @@ class TaskCrullerFinetuneCORD(TaskTrain):
             "text_target": targets,
         }  
 
-    def train_step(self, sample: Dict[str, Any]) -> Dict[str, Any]:
+    def _forward(self, image_input, target):
+        with self.autocast():
+            if self.finetune_donut_weights:
+                output = self.model(pixel_values=image_input, decoder_input_ids=label, labels=text_target)
+                logits = output["logits"]
+            else:
+                output = self.model(image_input, label)
+                logits = output["logits"]
+
+            loss = self.loss(
+                logits.view(-1, self.vocab_size),
+                text_target.view(-1),
+            )
+
+        if accum_steps > 1:
+            loss /= accum_steps
+        return loss
+
+    def step(self, sample: Dict[str, Any]) -> Dict[str, Any]:
         image_input = sample["image"]
         label = sample["label"]
         text_target = sample["text_target"]
@@ -446,54 +418,7 @@ class TaskCrullerFinetuneCORD(TaskTrain):
         accum_steps = self.cfg.opt.grad_accum_steps
         need_update = (self.interval_batch_idx + 1) % accum_steps == 0
 
-        def _forward():
-            with self.autocast():
-                if self.finetune_donut_weights:
-                    #print(image_input.shape, label.shape, text_target.shape)
-                    output = self.model(pixel_values=image_input, decoder_input_ids=label, labels=text_target)
-                    logits = output["logits"]
-                else:
-                    output = self.model(image_input, label)
-                    logits = output["logits"]
-                #print(logits.shape, text_target.shape)
-                
-                loss = self.loss(
-                    logits.view(-1, self.vocab_size),
-                    text_target.view(-1),
-                )
-                #print(loss.item())
-            if accum_steps > 1:
-                loss /= accum_steps
-            return loss
 
-        def _backward(_loss):
-            if self.scaler is not None:
-                self.scaler(
-                    _loss,
-                    self.optimizer,
-                    clip_grad=self.cfg.opt.clip_grad_value,
-                    clip_mode=self.cfg.opt.clip_grad_mode,
-                    parameters=self.model.parameters(),
-                    need_update=need_update,
-                )
-            else:
-                _loss.backward()
-                if need_update:
-                    if self.cfg.opt.clip_grad_value is not None:
-                        timm.utils.dispatch_clip_grad(
-                            self.model.parameters(),
-                            value=self.cfg.opt.clip_grad_value,
-                            mode=self.cfg.opt.clip_grad_mode,
-                        )
-                    self.optimizer.step()
-
-        if self.has_no_sync and not need_update:
-            with self.model.no_sync():
-                loss = _forward()
-                _backward(loss)
-        else:
-            loss = _forward()
-            _backward(loss)
         self.batch_idx += 1
         self.interval_batch_idx += 1
         if self.step % 100 == 0:

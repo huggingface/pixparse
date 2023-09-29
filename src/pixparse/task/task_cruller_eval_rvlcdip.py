@@ -13,7 +13,7 @@ from torchvision import transforms
 from pixparse.data import preprocess_ocr_anno, preprocess_text_anno
 from pixparse.framework import (DeviceEnv, Monitor, TaskEval, TaskEvalCfg)
 from pixparse.models import Cruller, ModelCfg, get_model_config
-from pixparse.tokenizers import TokenizerCfg, TokenizerHF
+from pixparse.tokenizers import TokenizerCfg, create_tokenizer
 
 _logger = logging.getLogger(__name__)
 
@@ -43,6 +43,7 @@ class TaskCrullerEvalRVLCDIPCfg(TaskEvalCfg):
         else:
             self.model_name = "custom"
 
+
 class TaskCrullerEvalRVLCDIP(TaskEval):
     """Simple task to evaluate donut on FUNSD data and get metrics in similar format as Cruller."""
 
@@ -69,7 +70,7 @@ class TaskCrullerEvalRVLCDIP(TaskEval):
         self.prompt_end_token = self.task_start_token
         self.max_position_embeddings = cfg.model.text_decoder.max_length
         self.text_anno_fn = True  # set for image-text dataset experiments
-        self.tokenizer = TokenizerHF(cfg.tokenizer)
+        self.tokenizer = create_tokenizer(cfg.tokenizer)
 
         self.state_dict = OrderedDict()
         self.resume = False
@@ -98,7 +99,7 @@ class TaskCrullerEvalRVLCDIP(TaskEval):
             "<scientific_report/>",
             "<specification/>",
         ]
-        newly_added_num = self.tokenizer.trunk.add_special_tokens(
+        newly_added_num = self.tokenizer.add_special_tokens(
             {"additional_special_tokens": sorted(set(special_tokens))}
         )
 
@@ -124,12 +125,12 @@ class TaskCrullerEvalRVLCDIP(TaskEval):
             15: "memo",
         }
 
-        self.vocab_size = len(self.tokenizer.trunk)
+        self.vocab_size = len(self.tokenizer)
 
         preproc_fn = preprocess_text_anno if self.text_anno_fn else preprocess_ocr_anno
         self.anno_preprocess_eval = partial(
             preproc_fn,
-            tokenizer=self.tokenizer.trunk,
+            tokenizer=self.tokenizer,
             max_position_embeddings=self.max_position_embeddings,
             task_start_token=self.task_start_token,
             prompt_end_token=self.prompt_end_token,
@@ -140,7 +141,7 @@ class TaskCrullerEvalRVLCDIP(TaskEval):
         # We need to resize the token embeddings after the model has been initialized
         if newly_added_num > 0:
             self.model.text_decoder.trunk.resize_token_embeddings(
-                len(self.tokenizer.trunk)
+                len(self.tokenizer)
             )
 
         img_mean = self.model.image_encoder.trunk.pretrained_cfg["mean"]
@@ -192,7 +193,7 @@ class TaskCrullerEvalRVLCDIP(TaskEval):
     ):
         if past is not None:
             past_key_values = past
-        attention_mask = input_ids.ne(self.tokenizer.trunk.pad_token_id).long()
+        attention_mask = input_ids.ne(self.tokenizer.pad_token_id).long()
         if past_key_values is not None:
             input_ids = input_ids[:, -1:]
         output = {
@@ -213,7 +214,6 @@ class TaskCrullerEvalRVLCDIP(TaskEval):
 
         return loaders
         # return loaders_and_tasks
-
 
     def safe_image_transform(self, img):
         try:
@@ -261,7 +261,7 @@ class TaskCrullerEvalRVLCDIP(TaskEval):
             current_strings = ["<s_rvlcdip>" for _ in range(tensor_images.shape[0])]
 
             input_ids = (
-                torch.tensor(self.tokenizer.trunk.encode("<s_rvlcdip>")[1])
+                torch.tensor(self.tokenizer.encode("<s_rvlcdip>")[1])
                 .unsqueeze(0)
                 .repeat(tensor_images.shape[0], 1)
                 .to(self.device_env.device)
@@ -282,7 +282,7 @@ class TaskCrullerEvalRVLCDIP(TaskEval):
                     next_token_id = next_token_ids[
                         idx, -1
                     ].item()
-                    next_token = self.tokenizer.trunk.decode([next_token_id])
+                    next_token = self.tokenizer.decode([next_token_id])
 
                     current_strings[idx] += next_token
 
@@ -303,7 +303,7 @@ class TaskCrullerEvalRVLCDIP(TaskEval):
                             already_counted[idx] = True
 
                 input_ids = torch.tensor(
-                    [self.tokenizer.trunk.encode(s)[1:] for s in current_strings]
+                    [self.tokenizer.encode(s)[1:] for s in current_strings]
                 ).to(self.device_env.device)
 
         # TODO Add other metrics relevant for eval step

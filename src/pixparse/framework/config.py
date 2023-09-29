@@ -1,6 +1,9 @@
 from dataclasses import dataclass, field
 from typing import Optional, Tuple
 
+from pixparse.models import ModelArgs
+from pixparse.tokenizers import TokenizerCfg
+
 
 @dataclass
 class OptimizationCfg:
@@ -22,19 +25,24 @@ class OptimizationCfg:
 
 
 @dataclass
-class TaskTrainCfg:
-    num_intervals: int = 100
-    num_warmup_intervals: int = 5
-    eval_frequency: int = 1000 
-    opt: OptimizationCfg = field(default_factory=OptimizationCfg)
+class TaskCfg:
     dtype: Optional[str] = None
     amp: bool = True
-    model_name: str = ""
+
 
 @dataclass
-class TaskEvalCfg:
-    dtype: Optional[str] = None
-    amp: bool = True
-    model_name: str = ""
-    model_state_dict: dict = field(default_factory=dict) #FIXME move out state dict into dict of dict
+class TaskTrainCfg(TaskCfg):
+    model: ModelArgs = field(default_factory=ModelArgs)
+    tokenizer: Optional[TokenizerCfg] = None
 
+    num_intervals: int = 100
+    num_warmup_intervals: int = 5
+    log_frequency: int = 100  # log every n steps
+    metrics_frequency: int = 1000  # calculate train metrics every n steps
+    eval_frequency: Optional[int] = None  # FIXME needs redefinition
+    opt: OptimizationCfg = field(default_factory=OptimizationCfg)
+
+
+@dataclass
+class TaskEvalCfg(TaskCfg):
+    pass

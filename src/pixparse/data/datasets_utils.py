@@ -3,7 +3,6 @@ import os
 from ast import literal_eval
 
 import torch
-from datasets import load_dataset
 from PIL import Image
 from torch.utils.data import DataLoader, Dataset
 from torchvision import transforms
@@ -19,6 +18,7 @@ through a first pass of the dataset.
 In particular for json processing of datasets, each key becomes a
 new special token, and the tokenizer vocab needs to be resized on the fly. 
 """
+
 
 class CustomVQADataset(Dataset):
     """
@@ -78,6 +78,7 @@ class CustomVQADataset(Dataset):
         
         return {"image": image, "labels": labels, "image_id": image_id, "question_id": question_id}
 
+
 class SafeDataset:
     """
     This is a Dataset wrapped by a try/except in the __getitem__ in case
@@ -98,7 +99,11 @@ class SafeDataset:
             return None
 
 
-def get_additional_tokens_from_dataset(all_special_tokens:list, dataset=None, dataset_id:str="naver-clova-ix/cord-v2")->list:
+def get_additional_tokens_from_dataset(
+        all_special_tokens: list,
+        dataset=None,
+        dataset_id: str = "naver-clova-ix/cord-v2"
+) -> list:
     """
     This util is made to run a first pass for CORD
     with an instantiated tokenizer.
@@ -109,13 +114,13 @@ def get_additional_tokens_from_dataset(all_special_tokens:list, dataset=None, da
     Usage:
     # Instantiate tokenizer for your task
     taskcfg = TaskCrullerPretrainCfg(model_name="cruller_base")
-    tokenizer = TokenizerHF(taskcfg.tokenizer)
-    all_special_tokens = tokenizer.trunk.all_special_tokens
+    tokenizer = create_tokenizer(taskcfg.tokenizer)
+    all_special_tokens = tokenizer.all_special_tokens
 
     new_special_tokens = get_additional_tokens_from_dataset(all_special_tokens, dataset_id="naver-clova-ix/cord-v2")
 
     # Now you can add the tokens
-    newly_added_num = tokenizer.trunk.add_special_tokens(
+    newly_added_num = tokenizer.add_special_tokens(
         {"additional_special_tokens": sorted(set(new_special_tokens))}
     )
 
@@ -123,12 +128,13 @@ def get_additional_tokens_from_dataset(all_special_tokens:list, dataset=None, da
 
     if newly_added_num > 0:
         model.text_decoder.trunk.resize_token_embeddings(
-            len(tokenizer.trunk)
+            len(tokenizer)
         )
 
     # now your tokenizer will parse correctly the dataset.
     """
     if dataset_id == "naver-clova-ix/cord-v2":
+        from datasets import load_dataset
 
         def collate_fn(batch):
             """
@@ -141,7 +147,6 @@ def get_additional_tokens_from_dataset(all_special_tokens:list, dataset=None, da
 
         cord = load_dataset(dataset_id)
         loader = DataLoader(cord["train"], batch_size=32, collate_fn=collate_fn)
-
 
         new_special_tokens = []
         for i, batch in enumerate(loader):

@@ -4,6 +4,7 @@ from dataclasses import dataclass, field, asdict
 from functools import partial
 from typing import Optional, List, Any
 
+import numpy as np
 import torch
 from torch.utils.data import DataLoader
 import torch.nn as nn
@@ -19,7 +20,7 @@ from timm.scheduler import create_scheduler_v2
 
 from pixparse.framework import TaskTrainCfg, TaskTrain, DeviceEnv, Monitor
 from pixparse.models import Cruller, ModelCfg, get_model_config
-from pixparse.tokenizers import TokenizerHF, TokenizerCfg
+from pixparse.tokenizers import create_tokenizer, TokenizerCfg
 from pixparse.data import preprocess_ocr_anno, preprocess_text_anno
 from timm.layers import SelectAdaptivePool2d
 
@@ -29,12 +30,10 @@ from collections import OrderedDict
 
 from ast import literal_eval
 
-from datasets import load_dataset
 from pixparse.utils.json_utils import json2token, token2json
 
 from timm.data.constants import IMAGENET_DEFAULT_MEAN, IMAGENET_DEFAULT_STD
 from pixparse.utils.json_utils import JSONParseEvaluator
-import numpy as np
 
 _logger = logging.getLogger(__name__)
 
@@ -90,7 +89,7 @@ class TaskCrullerFinetuneDOCVQA(TaskTrain):
         self.prompt_end_token = "<s_answer>" # Slice prompt right before answer content
         self.max_position_embeddings = cfg.model.text_decoder.max_length
         self.text_anno_fn = True  # set for image-text dataset experiments
-        self.tokenizer = TokenizerHF(cfg.tokenizer)
+        self.tokenizer = create_tokenizer(cfg.tokenizer)
 
         self.state_dict = OrderedDict()
         self.resume = False
@@ -111,7 +110,7 @@ class TaskCrullerFinetuneDOCVQA(TaskTrain):
         preproc_fn = preprocess_text_anno if self.text_anno_fn else preprocess_ocr_anno
         self.anno_preprocess_train = partial(
             preproc_fn,
-            tokenizer=self.tokenizer.trunk,
+            tokenizer=self.tokenizer,
             max_position_embeddings=self.max_position_embeddings,
             task_start_token=self.task_start_token,
             prompt_end_token=self.prompt_end_token,
@@ -124,13 +123,13 @@ class TaskCrullerFinetuneDOCVQA(TaskTrain):
             "<s_pretrain>",  # task start (based on dataset/task)
         ]
 
-        num_tokens_from_pretrain = self.tokenizer.trunk.add_special_tokens(
+        num_tokens_from_pretrain = self.tokenizer.add_special_tokens(
             {"additional_special_tokens": sorted(set(special_tokens_from_pretrain))}
         )
         # need to resize embeddings from pretrained model in order to load it
         if num_tokens_from_pretrain > 0:
             self.model.text_decoder.trunk.resize_token_embeddings(
-                len(self.tokenizer.trunk)
+                len(self.tokenizer)
             )
 
         self.loss = nn.CrossEntropyLoss(ignore_index=-100)
@@ -175,7 +174,7 @@ class TaskCrullerFinetuneDOCVQA(TaskTrain):
             ]
         )
 
-    def train_setup(
+    def setup(
         self,
         num_batches_per_interval: int,
     ):
@@ -202,15 +201,15 @@ class TaskCrullerFinetuneDOCVQA(TaskTrain):
         _logger.info(f"Resuming from existing checkpoint. ")
         self.state_dict = {k.replace("module.", ""): v for k, v in self.state_dict.items()}
         self.model.load_state_dict(self.state_dict)
-        self.newly_added_num = self.tokenizer.trunk.add_special_tokens(
+        self.newly_added_num = self.tokenizer.add_special_tokens(
             {"additional_special_tokens": sorted(set(self.special_tokens_finetune))}
         )
-        self.vocab_size = len(self.tokenizer.trunk)
+        self.vocab_size = len(self.tokenizer)
 
         # We resize token embeddings after initializing
         if self.newly_added_num > 0:
             self.model.text_decoder.trunk.resize_token_embeddings(
-                len(self.tokenizer.trunk)
+                len(self.tokenizer)
             )
         
         device = self.device_env.device
@@ -226,63 +225,22 @@ class TaskCrullerFinetuneDOCVQA(TaskTrain):
             )
             self.has_no_sync = hasattr(self.model, "no_sync")
 
-        opt_kwargs = {}
-        if self.cfg.opt.betas is not None:
-            opt_kwargs["betas"] = self.cfg.opt.betas
-        if self.cfg.opt.momentum is not None:
-            opt_kwargs["momentum"] = self.cfg.opt.momentum
-
-        self.optimizer = create_optimizer_v2(
-            self.model,
-            self.cfg.opt.optimizer,
-            lr=self.cfg.opt.learning_rate,
-            eps=self.cfg.opt.eps,
-            layer_decay=self.cfg.opt.layer_decay,
-            **opt_kwargs,
-        )
-        #self.optimizer = torch.optim.Adam(self.model.parameters(), lr = self.cfg.opt.learning_rate)
-
-        if self.cfg.amp:
-            self.scaler = timm.utils.NativeScaler()
-            self.autocast = partial(
-                torch.autocast, device_type=device.type, dtype=self.amp_dtype
-            )
-        else:
-            self.scaler = None
-            self.autocast = nullcontext
-
-        # FIXME will need two paths here to support interval vs step based durations
-        #  in either case LR is always stepped with each optimizer update (train step)
-        self.num_steps_per_interval = (
-            num_batches_per_interval // self.cfg.opt.grad_accum_steps
-        )
-        self.scheduler, num_scheduled_epochs = create_scheduler_v2(
-            self.optimizer,
-            self.cfg.opt.scheduler,
-            warmup_lr=self.cfg.opt.warmup_learning_rate,
-            warmup_epochs=self.num_warmup_intervals,
-            num_epochs=self.num_intervals,
-            step_on_epochs=False,  # sched is stepped on updates
-            updates_per_epoch=self.num_steps_per_interval,
-        )
-        self.scheduler.step_update(0)
+        self._setup_optimization(num_batches_per_interval)
 
     def text_input_to_target(self, text_input, ignore_id=-100):
         target = text_input.clone()
         # model doesn't need to predict pad token
-        target[target == self.tokenizer.trunk.pad_token_id] = ignore_id
+        target[target == self.tokenizer.pad_token_id] = ignore_id
         # model doesn't need to predict prompt (for VQA)
-        prompt_end_token_id = self.tokenizer.trunk.convert_tokens_to_ids(
+        prompt_end_token_id = self.tokenizer.convert_tokens_to_ids(
             self.prompt_end_token
         )
         slice_id = torch.nonzero(target == prompt_end_token_id).sum() + 1
         target[:slice_id] = ignore_id
         return target
 
-            
-
     def collate_fn(self, batch):
-        tokenizer_fn = lambda x: self.tokenizer.trunk(
+        tokenizer_fn = lambda x: self.tokenizer(
             x,
             add_special_tokens=False,
             return_tensors="pt",
@@ -298,7 +256,7 @@ class TaskCrullerFinetuneDOCVQA(TaskTrain):
             inputs_to_stack.append(tokenizer_fn(
                 "<s_docvqa>"
                 + text
-                + self.tokenizer.trunk.eos_token
+                + self.tokenizer.eos_token
             )) 
         # Check max length here and truncate/pad if needed
         # You could enforce it to be under or equal to a specific length
@@ -318,8 +276,7 @@ class TaskCrullerFinetuneDOCVQA(TaskTrain):
             "text_target": targets,
         }
 
-
-    def train_step(self, sample: Dict[str, Any]) -> Dict[str, Any]:
+    def step(self, sample: Dict[str, Any]) -> Dict[str, Any]:
         image_input = sample["image"]
         label = sample["label"]
         text_target = sample["text_target"]
@@ -363,7 +320,7 @@ class TaskCrullerFinetuneDOCVQA(TaskTrain):
                             value=self.cfg.opt.clip_grad_value,
                             mode=self.cfg.opt.clip_grad_mode,
                         )
-                    self.optimizer.step()
+                    self.optimizer.step_idx()
 
         if self.has_no_sync and not need_update:
             with self.model.no_sync():
@@ -392,8 +349,6 @@ class TaskCrullerFinetuneDOCVQA(TaskTrain):
         self.step += 1
         self.scheduler.step_update(self.step)
         self.optimizer.zero_grad()
-
-
 
     def state_dict(self):
         state_dicts = {}

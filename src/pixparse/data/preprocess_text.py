@@ -75,13 +75,10 @@ def preprocess_ocr_anno(
     if not anno['pages'][current_index]['text']:
         current_index = get_next_valid_page_index(current_index, num_pages, anno)
 
-
     page_indices = []
     text_pages = []
     target_pages = []
-
-    n_wanted_pages = min(1, num_pages) #TODO increase that number for multipage processing
-
+    n_wanted_pages = min(1, num_pages)  # TODO increase that number for multipage processing
     while len(text_pages) < n_wanted_pages:
         # FIXME treating pages separately, this best approach or tokenize w/ page-break?
         anno_page = anno['pages'][current_index]
@@ -106,8 +103,9 @@ def preprocess_ocr_anno(
 
         current_index = get_next_valid_page_index(current_index, num_pages, anno)
 
+    info = dict(page_indices=page_indices, num_pages=num_pages, orig_text=orig_text)
+    return dict(text=text_pages, target=target_pages), info
 
-    return dict(text=text_pages, target=target_pages), dict(page_indices=page_indices, num_pages=num_pages, orig_text=orig_text)
 
 def get_next_valid_page_index(current_index: int, num_pages: int, anno: dict, retries: int=10):
     """

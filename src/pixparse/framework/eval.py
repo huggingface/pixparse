@@ -9,8 +9,6 @@ def evaluate(task: TaskEval, loaders):
     authorized_loaders = task.prepare_for_evaluation(loaders)
     # FIXME (Pablo) not sure if I understand this correctly,
     #  are tasks in loader_and tasks -training- tasks? or other eval tasks?
-    # If they are train tasks, it means each train task must have en eval_step
-    # Which feels less general-purpose
     for key, loader in authorized_loaders.items():
         metrics[key] = dict()
         for index_batch, sample in enumerate(loader.loader):
