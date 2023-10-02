@@ -124,7 +124,7 @@ def main():
         if isinstance(checkpoint, OrderedDict):
             state_dict = checkpoint
         else:
-            state_dict = checkpoint["model"]
+            state_dict = checkpoint["state_dict"]
         # Create safe metrics file path
 
         checkpoint_name = eval_cfg.checkpoint_path.replace("/", "_").replace(".pt", "")

@@ -74,28 +74,28 @@ class TaskCrullerEvalDOCVQACfg(TaskEvalCfg):
 class DonutTokenizer(nn.Module):
     def __init__(self):
         super().__init__()
-        
+
         """self.trunk = XLMRobertaTokenizer.from_pretrained(
                 "hyunwoongko/asian-bart-ecjk"
             )
         """
 
-        
+
         """
         self.trunk = XLMRobertaTokenizerFast.from_pretrained(
                 "hyunwoongko/asian-bart-ecjk"
             ) # handles spaces sort of, and adds weird tokens ion>What is the date when the approval form was filled ?</s_question><s_answer>▁june▁7,▁1988ko_KR</s>
             # off by one error?
- 
-        """ 
-        
-        
-        
+
+        """
+
+
+
         self.trunk = XLMRobertaTokenizerFast.from_pretrained(
                 "naver-clova-ix/donut-base-finetuned-docvqa"
             ) # Good answers but misses whitespaces, probably same as AutoTokenizer
-            
-        
+
+
         #self.trunk = AutoTokenizer.from_pretrained("naver-clova-ix/donut-base-finetuned-docvqa") # Good answers but misses whitespaces
         #self.trunk = MBartTokenizer.from_pretrained("hyunwoongko/asian-bart-ecjk") # adds a bunch of de_DE ko_KR, etc
         #self.trunk = BartTokenizer.from_pretrained("hyunwoongko/asian-bart-ecjk") # NOT WORKING
@@ -149,10 +149,10 @@ class TaskCrullerEvalDOCVQA(TaskEval):
         self.prompt_end_token = "<s_answer>"
         self.max_position_embeddings = cfg.model.text_decoder.max_length
         self.text_anno_fn = True  # set for image-text dataset experiments
-        
+
         self.resize_embeddings = False
         self.max_length = 128
-        self.eval_donut = True
+        self.eval_donut = False
 
         if self.eval_donut:
             self.tokenizer = DonutTokenizer()
@@ -161,7 +161,7 @@ class TaskCrullerEvalDOCVQA(TaskEval):
 
         self.state_dict = OrderedDict()
         self.resume = False
-        
+
 
 
         if self.eval_donut:
@@ -171,9 +171,9 @@ class TaskCrullerEvalDOCVQA(TaskEval):
                 "<no/>",
                 "<s_answer>",
                 "<s_docvqa>",
-                "<s_iitcdip>",
+#                "<s_iitcdip>",
                 "<s_question>",
-                "<s_synthdog>",
+#                "<s_synthdog>",
                 "<yes/>",
             ]
         else:
@@ -184,8 +184,8 @@ class TaskCrullerEvalDOCVQA(TaskEval):
                 "<s_question>",
                 "</s_question>",
                 "</s_answer>",
-                "<yes/>",
-                "<no/>",
+#                "<yes/>",
+#                "<no/>",
             ]
 
         # ---- add pretraining tokens
@@ -326,8 +326,8 @@ class TaskCrullerEvalDOCVQA(TaskEval):
     def setup(self):
         device = self.device_env.device
         if self.eval_donut:
-            pass  # We directly load the model we want to evaluate        
-        else: 
+            pass  # We directly load the model we want to evaluate
+        else:
             if not self.resize_embeddings:
                 # load the state dict as is
                 self.model.load_state_dict(self.resume_state_dict)
@@ -528,7 +528,6 @@ class TaskCrullerEvalDOCVQA(TaskEval):
                         break
 
                     input_ids = self.tokenizer.trunk.encode(current_string, add_special_tokens=False, return_tensors="pt").to(self.device_env.device)
-                    breakpoint()
 
                 predicted_json = token2json(current_string)
                 if "answer" in predicted_json:
@@ -550,7 +549,7 @@ class TaskCrullerEvalDOCVQA(TaskEval):
         # FIXME should only save for test set
         # FIXME pass along path from config and experiment state
         with open(
-            "/fsx/pablo/metrics_docvqa/testset_train+val_trained_samecount.json", "w"
+            "/fsx/pablo/metrics_docvqa/vqa_swin_384_to_1920_testset_train+val_trained_samecount.json", "w"
         ) as f:
             json.dump(self.test_set_answers, f)
         return {"ANLS": anls}

@@ -55,7 +55,6 @@ def train(
 ):
     device_env = task.device_env
     train_loader = loaders['train']
-
     for i in range(task.start_interval, task.num_intervals):
         # FIXME flatten interval loop to have one eval point
         #  i.e step intervals vs epoch intervals handled similarly?
@@ -63,12 +62,16 @@ def train(
         train_one_interval(
             task,
             train_loader,
-            interval=i
+            interval=i,
+            output_checkpoint_dir=cfg.output_checkpoint_dir, # FIXME used to save checkpoints sub-interval, could we pass cfg?
+            experiment=cfg.experiment
         )
         # save checkpoint
+
         checkpoint_dir = os.path.join(cfg.output_checkpoint_dir, cfg.experiment)
         os.makedirs(checkpoint_dir, exist_ok=True)
         if device_env.is_primary():
+            """
             s3_mover = S3Mover(local_path=checkpoint_dir,
                 s3_path=os.path.join("s3://pixparse-exps/", cfg.experiment),
                 remove_after_upload=True,
@@ -79,13 +82,15 @@ def train(
             s3_mover.update()
             world_process_group = device_env.get_world_process_group()
             s3_mover.distributed_wait_for_completion(dist, world_process_group)
+            """
             checkpoint = {
                 'interval': i,
                 'state_dict': task.model.state_dict(),
                 'optimizer': task.optimizer.state_dict()
             }
-            torch.save(checkpoint, os.path.join(checkpoint_dir, f'checkpoint-{i}.pt'))
-            s3_mover.start_uploading()
+            if i in [2, 5, 9, 13, 19, 23, 29, 59, 79, 99, 129, 199]:
+                torch.save(checkpoint, os.path.join(checkpoint_dir, f'checkpoint-{i}.pt'))
+            # s3_mover.start_uploading()
 
 
 parser = ArgumentParser(
@@ -150,9 +155,9 @@ def main():
     )
 
     # ----- Model resuming from checkpoint -----
-    # FIXME make optional for resume. 
-    # Task needs to have 
-    # -- an attribute OrderedDict state_dict 
+    # FIXME make optional for resume.
+    # Task needs to have
+    # -- an attribute OrderedDict state_dict
     # -- an attribute bool resume
     if train_cfg.resume:
         checkpoint_path = train_cfg.checkpoint_path
@@ -173,7 +178,7 @@ def main():
         if isinstance(checkpoint, OrderedDict):
             state_dict = checkpoint
         else:
-            state_dict = checkpoint["model"]
+            state_dict = checkpoint["state_dict"]
         task.state_dict = state_dict
         task.resume = True
 
