@@ -21,7 +21,11 @@ from timm.scheduler import create_scheduler_v2
 from pixparse.framework import TaskTrainCfg, TaskTrain, DeviceEnv, Monitor
 from pixparse.models import create_model, ModelArgs
 from pixparse.tokenizers import create_tokenizer, TokenizerCfg
-from pixparse.data import preprocess_ocr_anno, preprocess_text_anno, text_input_to_target
+from pixparse.data import (
+    preprocess_ocr_anno,
+    preprocess_text_anno,
+    text_input_to_target,
+)
 from pixparse.utils.ocr_utils import get_ocr_metrics
 
 
@@ -77,7 +81,16 @@ class CollateCORD(BaseCollate):
 
     def pack_inputs(self, images, inputs_to_stack):
         text_inputs = torch.stack(inputs_to_stack)
-        targets = torch.stack([text_input_to_target(text_input=text, tokenizer=self.tokenizer, prompt_end_token=self.start_token) for text in text_inputs])
+        targets = torch.stack(
+            [
+                text_input_to_target(
+                    text_input=text,
+                    tokenizer=self.tokenizer,
+                    prompt_end_token=self.start_token,
+                )
+                for text in text_inputs
+            ]
+        )
 
         images = torch.stack([self.image_preprocess(img) for img in images])
         text_inputs = text_inputs[:, :-1]
@@ -87,7 +100,6 @@ class CollateCORD(BaseCollate):
             "label": text_inputs,
             "text_target": targets,
         }
-
 
 
 @dataclass
@@ -396,45 +408,11 @@ class TaskCrullerFinetuneCORD(TaskTrain):
         return target
 
     def collate_fn(self, batch):
-        """
-        basic collator for PIL images, as returned by rvlcdip dataloader (among others)
-        """
-        tokenizer_fn = lambda x: self.tokenizer(
-            x,  # FIXME move this batcher/tokenizer elsewhere
-            add_special_tokens=False,
-            return_tensors="pt",
-            max_length=512,
-            padding="max_length",
-            truncation=True,
-        ).input_ids[0]
-
-        images = [item["image"] for item in batch]
-        raw_texts = [literal_eval(item["ground_truth"])["gt_parse"] for item in batch]
-        inputs_to_stack = []
-        for text in raw_texts:
-            tokens_from_json, _ = json2token(
-                text, self.tokenizer.all_special_tokens, sort_json_key=False
-            )
-            inputs_to_stack.append(
-                tokenizer_fn(
-                    self.task_start_token
-                    # + self.tokenizer.bos_token
-                    + tokens_from_json
-                    + self.tokenizer.eos_token
-                )
-            )
-        text_inputs = torch.stack(inputs_to_stack)
-        targets = torch.stack([self.text_input_to_target(text) for text in text_inputs])
-
-        transform = self.image_preprocess_train
-        images = torch.stack([transform(img) for img in images])
-        text_inputs = text_inputs[:, :-1]
-        targets = targets[:, 1:]
-        return {
-            "image": images,
-            "label": text_inputs,
-            "text_target": targets,
-        }
+        return CollateCORD(
+            self.tokenizer,
+            self.image_preprocess_train,
+            self.task_start_token,
+        )
 
     def _forward(self, image_input, target):
         with self.autocast():

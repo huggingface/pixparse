@@ -24,7 +24,11 @@ from pixparse.models import Cruller, ModelCfg, get_model_config
 from pixparse.models import create_model, ModelArgs
 
 from pixparse.tokenizers import create_tokenizer, TokenizerCfg
-from pixparse.data import preprocess_ocr_anno, preprocess_text_anno, text_input_to_target
+from pixparse.data import (
+    preprocess_ocr_anno,
+    preprocess_text_anno,
+    text_input_to_target,
+)
 from pixparse.data.loader import BaseCollate
 from timm.layers import SelectAdaptivePool2d
 
@@ -46,7 +50,12 @@ class CollateRVLCDIP(BaseCollate):
     """
 
     def __init__(
-        self, tokenizer, image_preprocess, start_token, max_length: int, label_int2str: dict
+        self,
+        tokenizer,
+        image_preprocess,
+        start_token,
+        max_length: int,
+        label_int2str: dict,
     ):
         super().__init__(
             tokenizer, image_preprocess, start_token, max_length=max_length
@@ -72,7 +81,14 @@ class CollateRVLCDIP(BaseCollate):
         images = torch.stack([self.image_preprocess(img) for img in images])
         labels = torch.stack(labels_tokens)
         targets = torch.stack(
-            [text_input_to_target(text_input=text, tokenizer=self.tokenizer, prompt_end_token=self.start_token) for text in labels]
+            [
+                text_input_to_target(
+                    text_input=text,
+                    tokenizer=self.tokenizer,
+                    prompt_end_token=self.start_token,
+                )
+                for text in labels
+            ]
         )
         labels = labels[:, :-1]
         targets = targets[:, 1:]

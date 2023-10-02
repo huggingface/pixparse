@@ -9,7 +9,9 @@ from .config import DataCfg
 
 
 class BaseCollate:
-    def __init__(self, tokenizer, image_preprocess, start_token: str, max_length:int=512):
+    def __init__(
+        self, tokenizer, image_preprocess, start_token: str, max_length: int = 512
+    ):
         self.tokenizer = tokenizer
         self.image_preprocess = image_preprocess
         self.start_token = start_token
