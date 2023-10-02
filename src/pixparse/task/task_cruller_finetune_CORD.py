@@ -17,11 +17,13 @@ import timm.utils
 from timm.optim import create_optimizer_v2
 from timm.scheduler import create_scheduler_v2
 
+
 from pixparse.framework import TaskTrainCfg, TaskTrain, DeviceEnv, Monitor
-from pixparse.models import Cruller, ModelCfg, get_model_config
+from pixparse.models import create_model, ModelArgs
 from pixparse.tokenizers import create_tokenizer, TokenizerCfg
-from pixparse.data import preprocess_ocr_anno, preprocess_text_anno
-from timm.layers import SelectAdaptivePool2d
+from pixparse.data import preprocess_ocr_anno, preprocess_text_anno, text_input_to_target
+from pixparse.utils.ocr_utils import get_ocr_metrics
+
 
 from typing import Dict, List
 
@@ -34,33 +36,73 @@ from transformers import DonutProcessor, VisionEncoderDecoderModel
 
 from timm.data.constants import IMAGENET_DEFAULT_MEAN, IMAGENET_DEFAULT_STD
 from pixparse.utils.json_utils import JSONParseEvaluator
+from pixparse.data.loader import BaseCollate
 
 _logger = logging.getLogger(__name__)
 
 
+class CollateCORD(BaseCollate):
+    """
+    basic collator for PIL images, as returned by CORD dataloader
+    """
+
+    def __init__(
+        self,
+        tokenizer,
+        image_preprocess,
+        start_token,
+        max_length: int,
+    ):
+        super().__init__(
+            tokenizer, image_preprocess, start_token, max_length=max_length
+        )
+
+    def __call__(self, batch):
+        images = [item["image"] for item in batch]
+        raw_texts = [literal_eval(item["ground_truth"])["gt_parse"] for item in batch]
+        inputs_to_stack = []
+        for text in raw_texts:
+            tokens_from_json, _ = json2token(
+                text, self.tokenizer.all_special_tokens, sort_json_key=False
+            )
+            inputs_to_stack.append(
+                self.tokenizer_fn(
+                    self.start_token
+                    # + self.tokenizer.bos_token
+                    + tokens_from_json
+                    + self.tokenizer.eos_token
+                )
+            )
+        return self.pack_inputs(images, inputs_to_stack)
+
+    def pack_inputs(self, images, inputs_to_stack):
+        text_inputs = torch.stack(inputs_to_stack)
+        targets = torch.stack([text_input_to_target(text_input=text, tokenizer=self.tokenizer, prompt_end_token=self.start_token) for text in text_inputs])
+
+        images = torch.stack([self.image_preprocess(img) for img in images])
+        text_inputs = text_inputs[:, :-1]
+        targets = targets[:, 1:]
+        return {
+            "image": images,
+            "label": text_inputs,
+            "text_target": targets,
+        }
+
+
+
 @dataclass
 class TaskCrullerFinetuneCORDCfg(TaskTrainCfg):
-    model_name: Optional[
-        str
-    ] = None  # if model_name set, loads a pre-defined config in models/configs
-    model: ModelCfg = field(
-        default_factory=ModelCfg
-    )  # FIXME rename model_cfg to diff from model_name?
-    tokenizer: TokenizerCfg = field(default_factory=TokenizerCfg)
+    model: ModelArgs = field(
+        default_factory=lambda: ModelArgs(
+            name="cruller_base",  # override model default in spec per task
+        )
+    )
 
     def __post_init__(self):
-        # FIXME figure out how to get command line args to overlay on top pre-defined
-        # config but ONLY if they are specified on cmd line?
-        if self.model_name:
-            model = get_model_config(self.model_name)
-            if model is None:
-                _logger.warning(
-                    f"Model config for {self.model_name} was not found, using defaults."
-                )
-            else:
-                self.model = model
-        else:
-            self.model_name = "custom"
+        assert self.model.cfg is not None
+        if self.tokenizer is None:
+            # set tokenizer to text tower model name if not explicitly set
+            self.tokenizer = TokenizerCfg(name=self.model.cfg.text_decoder.name)
 
 
 def prepare_inputs_for_inference(
@@ -125,7 +167,7 @@ class TaskCrullerFinetuneCORD(TaskTrain):
             "<sep/>",  # JSON list separator
             self.task_start_token,  # task start (based on dataset/task)
             self.prompt_end_token,  # prompt end (or task_start for pretrain)
-            "</s_service_price>", # This is only for CORD. To reproduce it, check pixparse.utils.dataset_utils.get_additional_tokens_from_dataset
+            "</s_service_price>",  # This is only for CORD. To reproduce it, check pixparse.utils.dataset_utils.get_additional_tokens_from_dataset
             "<s_subtotal_price>",
             "<s_discountprice>",
             "</s_sub>",
@@ -194,13 +236,17 @@ class TaskCrullerFinetuneCORD(TaskTrain):
         """
 
         self.finetune_donut_weights = False
-        _logger.info(f'Finetuning donut weights? {self.finetune_donut_weights}')
+        _logger.info(f"Finetuning donut weights? {self.finetune_donut_weights}")
 
         if self.finetune_donut_weights:
-            self.model = VisionEncoderDecoderModel.from_pretrained("naver-clova-ix/donut-base")
+            self.model = VisionEncoderDecoderModel.from_pretrained(
+                "naver-clova-ix/donut-base"
+            )
         else:
-            self.model = Cruller(cfg.model)  # FIXME would be good to defer weight init here
-
+            self.model = create_model(
+                model_cfg,
+                pretrained="",  # FIXME pass through tags or paths for full pretrained image-text tower
+            )
             special_tokens_from_pretrain = [
                 "<sep/>",  # JSON list separator
                 "<s_pretrain>",  # task start (based on dataset/task)
@@ -302,12 +348,12 @@ class TaskCrullerFinetuneCORD(TaskTrain):
 
             # We resize token embeddings after initializing
             if self.newly_added_num > 0:
-                self.model.decoder.resize_token_embeddings(
-                    len(self.tokenizer)
-                )
+                self.model.decoder.resize_token_embeddings(len(self.tokenizer))
         else:
             _logger.info(f"Resuming from existing checkpoint. ")
-            self.state_dict = {k.replace("module.", ""): v for k, v in self.state_dict.items()}
+            self.state_dict = {
+                k.replace("module.", ""): v for k, v in self.state_dict.items()
+            }
             self.model.load_state_dict(self.state_dict)
             self.newly_added_num = self.tokenizer.add_special_tokens(
                 {"additional_special_tokens": sorted(set(self.special_tokens_finetune))}
@@ -319,7 +365,7 @@ class TaskCrullerFinetuneCORD(TaskTrain):
                 self.model.text_decoder.trunk.resize_token_embeddings(
                     len(self.tokenizer)
                 )
-            
+
         device = self.device_env.device
         self.model.to(device)
 
@@ -366,16 +412,18 @@ class TaskCrullerFinetuneCORD(TaskTrain):
         raw_texts = [literal_eval(item["ground_truth"])["gt_parse"] for item in batch]
         inputs_to_stack = []
         for text in raw_texts:
-            tokens_from_json, _ = json2token(text, self.tokenizer.all_special_tokens, sort_json_key=False)
-            inputs_to_stack.append(tokenizer_fn(
-                self.task_start_token
-                #+ self.tokenizer.bos_token
-                + tokens_from_json
-                + self.tokenizer.eos_token
-            ))
-        text_inputs = torch.stack(
-            inputs_to_stack
-        )
+            tokens_from_json, _ = json2token(
+                text, self.tokenizer.all_special_tokens, sort_json_key=False
+            )
+            inputs_to_stack.append(
+                tokenizer_fn(
+                    self.task_start_token
+                    # + self.tokenizer.bos_token
+                    + tokens_from_json
+                    + self.tokenizer.eos_token
+                )
+            )
+        text_inputs = torch.stack(inputs_to_stack)
         targets = torch.stack([self.text_input_to_target(text) for text in text_inputs])
 
         transform = self.image_preprocess_train
@@ -386,12 +434,16 @@ class TaskCrullerFinetuneCORD(TaskTrain):
             "image": images,
             "label": text_inputs,
             "text_target": targets,
-        }  
+        }
 
     def _forward(self, image_input, target):
         with self.autocast():
             if self.finetune_donut_weights:
-                output = self.model(pixel_values=image_input, decoder_input_ids=label, labels=text_target)
+                output = self.model(
+                    pixel_values=image_input,
+                    decoder_input_ids=label,
+                    labels=text_target,
+                )
                 logits = output["logits"]
             else:
                 output = self.model(image_input, label)
@@ -418,7 +470,6 @@ class TaskCrullerFinetuneCORD(TaskTrain):
         accum_steps = self.cfg.opt.grad_accum_steps
         need_update = (self.interval_batch_idx + 1) % accum_steps == 0
 
-
         self.batch_idx += 1
         self.interval_batch_idx += 1
         if self.step % 100 == 0:
@@ -440,7 +491,6 @@ class TaskCrullerFinetuneCORD(TaskTrain):
         self.scheduler.step_update(self.step)
         self.optimizer.zero_grad()
 
-
     def state_dict(self):
         state_dicts = {}
         state_dicts["model"] = self.model.state_dict()
@@ -448,5 +498,5 @@ class TaskCrullerFinetuneCORD(TaskTrain):
             "tokenizer"
         ] = (
             self.tokenizer.state_dict()
-        ) # FIXME not needed anymore? we preprocess everything before
+        )  # FIXME not needed anymore? we preprocess everything before
         return state_dicts

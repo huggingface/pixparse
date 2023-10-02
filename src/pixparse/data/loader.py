@@ -8,10 +8,33 @@ from pixparse.data.datasets_utils import SafeDataset, CustomVQADataset
 from .config import DataCfg
 
 
+class BaseCollate:
+    def __init__(self, tokenizer, image_preprocess, start_token: str, max_length:int=512):
+        self.tokenizer = tokenizer
+        self.image_preprocess = image_preprocess
+        self.start_token = start_token
+        self.max_length = max_length
+
+    def tokenizer_fn(self, x):
+        return self.tokenizer(
+            x,
+            add_special_tokens=False,
+            return_tensors="pt",
+            max_length=self.max_length,
+            padding="max_length",
+            truncation=True,
+        ).input_ids[0]
+
+    def __call__(self, batch):
+        # TODO add item["image"], item["label"] as default?
+        raise NotImplementedError("This method should be overridden by child classes")
+
+
 class GenericLoader(DataLoader):
     """
-    supercharged dataloader for hf datasets to match methods from webdataset loaders. 
+    supercharged dataloader for hf datasets to match methods from webdataset loaders.
     """
+
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.num_batches = len(self.dataset) // self.batch_size
@@ -39,7 +62,7 @@ def create_loader(
     Parameters:
         cfg (DataCfg): Configuration object for the dataset.
         is_train (bool): Indicates if the loader is for training data (True) or validation data (False).
-        collate_fn (Callable): Collate function to be used in loader. 
+        collate_fn (Callable): Collate function to be used in loader.
         image_preprocess (Callable): Image preprocessing sequence.
         anno_preprocess (Callable): Annotation preprocessing sequence.
         image_key (str, optional): Image formats/extensions that can be recognized and processed.
@@ -87,8 +110,7 @@ def create_loader(
             )
         else:
             dataset = load_dataset(
-                cfg.source,
-                verification_mode=VerificationMode.ALL_CHECKS
+                cfg.source, verification_mode=VerificationMode.ALL_CHECKS
             )[cfg.split]
         dataset = SafeDataset(dataset)
 
@@ -104,10 +126,10 @@ def create_loader(
             )
 
         base_loader = DataLoader(
-            dataset=dataset, 
+            dataset=dataset,
             collate_fn=collate_fn,
             sampler=sampler,
-            batch_size=cfg.batch_size, 
+            batch_size=cfg.batch_size,
             num_workers=cfg.num_workers,
         )
 

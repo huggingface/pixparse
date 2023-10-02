@@ -13,10 +13,19 @@ import timm.utils
 from timm.optim import create_optimizer_v2
 from timm.scheduler import create_scheduler_v2
 
-from pixparse.framework import TaskTrainCfg, TaskTrain, DeviceEnv, Monitor, OptimizationCfg
+from pixparse.framework import (
+    TaskTrainCfg,
+    TaskTrain,
+    DeviceEnv,
+    Monitor,
+    OptimizationCfg,
+)
 from pixparse.models import Cruller, ModelCfg, get_model_config
+from pixparse.models import create_model, ModelArgs
+
 from pixparse.tokenizers import create_tokenizer, TokenizerCfg
-from pixparse.data import preprocess_ocr_anno, preprocess_text_anno
+from pixparse.data import preprocess_ocr_anno, preprocess_text_anno, text_input_to_target
+from pixparse.data.loader import BaseCollate
 from timm.layers import SelectAdaptivePool2d
 
 from typing import Dict, List
@@ -31,50 +40,40 @@ class GetCLSToken(nn.Module):
         return x[:, 0, :]
 
 
-def text_input_to_target(self, text_input, tokenizer, ignore_id=-100):
-    target = text_input.clone()
-    # model doesn't need to predict pad token
-    target[target == tokenizer.pad_token_id] = ignore_id
-    # model doesn't need to predict prompt (for VQA)
-    prompt_end_token_id = tokenizer.convert_tokens_to_ids(self.prompt_end_token)
-    target[: torch.nonzero(target == prompt_end_token_id).sum() + 1] = ignore_id
-    return target
-
-
-class CollateRVLCDIP:
+class CollateRVLCDIP(BaseCollate):
     """
     basic collator for PIL images, as returned by rvlcdip dataloader (among others)
     """
 
     def __init__(
-            self,
-            tokenizer,
-            image_preprocess,
-            start_token,
-            label_int2str,
+        self, tokenizer, image_preprocess, start_token, max_length: int, label_int2str: dict
     ):
-        self.tokenizer = tokenizer
-        self.tokenizer_fn = lambda x: self.tokenizer(
-            x,
-            add_special_tokens=False,
-            return_tensors='pt',
-            max_length=5,
-            padding='max_length',
-            truncation=True).input_ids[0]
-        self.image_preprocess = image_preprocess
-        self.start_token = start_token
+        super().__init__(
+            tokenizer, image_preprocess, start_token, max_length=max_length
+        )
         self.int2str = label_int2str
 
     def __call__(self, batch):
         images = [item["image"] for item in batch]
         labels = [item["label"] for item in batch]
         labels_tokens = [
-            self.tokenizer_fn(self.start_token + "<" + self.int2str[label] + "/>" + self.tokenizer.eos_token)
+            self.tokenizer_fn(
+                self.start_token
+                + "<"
+                + self.int2str[label]
+                + "/>"
+                + self.tokenizer.eos_token
+            )
             for label in labels
         ]
+        return self.pack_inputs(images, labels_tokens)
+
+    def pack_inputs(self, images, labels_tokens):
         images = torch.stack([self.image_preprocess(img) for img in images])
         labels = torch.stack(labels_tokens)
-        targets = torch.stack([text_input_to_target(text, self.tokenizer) for text in labels])
+        targets = torch.stack(
+            [text_input_to_target(text_input=text, tokenizer=self.tokenizer, prompt_end_token=self.start_token) for text in labels]
+        )
         labels = labels[:, :-1]
         targets = targets[:, 1:]
 
@@ -83,28 +82,17 @@ class CollateRVLCDIP:
 
 @dataclass
 class TaskCrullerFinetuneRVLCDIPCfg(TaskTrainCfg):
-    # if model_name set, loads a pre-defined config in models/configs
-    model_name: Optional[str] = None
-    model: ModelCfg = field(default_factory=ModelCfg)  # FIXME rename model_cfg to diff from model_name?
-    tokenizer: TokenizerCfg = field(default_factory=TokenizerCfg)
-    opt: OptimizationCfg = field(default_factory=lambda: OptimizationCfg(
-        optimizer='nadamw',
-        learning_rate=1e-4,
-    ))
+    model: ModelArgs = field(
+        default_factory=lambda: ModelArgs(
+            name="cruller_base",  # override model default in spec per task
+        )
+    )
 
     def __post_init__(self):
-        # FIXME figure out how to get command line args to overlay on top pre-defined
-        # config but ONLY if they are specified on cmd line?
-        if self.model_name:
-            model = get_model_config(self.model_name)
-            if model is None:
-                _logger.warning(
-                    f"Model config for {self.model_name} was not found, using defaults."
-                )
-            else:
-                self.model = model
-        else:
-            self.model_name = "custom"
+        assert self.model.cfg is not None
+        if self.tokenizer is None:
+            # set tokenizer to text tower model name if not explicitly set
+            self.tokenizer = TokenizerCfg(name=self.model.cfg.text_decoder.name)
 
 
 class TaskCrullerFinetuneRVLCDIP(TaskTrain):
@@ -192,9 +180,7 @@ class TaskCrullerFinetuneRVLCDIP(TaskTrain):
         )
         # need to resize embeddings from pretrained model in order to load it
         if num_tokens_from_pretrain > 0:
-            self.model.text_decoder.trunk.resize_token_embeddings(
-                len(self.tokenizer)
-            )
+            self.model.text_decoder.trunk.resize_token_embeddings(len(self.tokenizer))
 
         self.loss = nn.CrossEntropyLoss(ignore_index=-100)
 
@@ -251,7 +237,9 @@ class TaskCrullerFinetuneRVLCDIP(TaskTrain):
 
         """
         _logger.info(f"Resuming from existing checkpoint. ")
-        self.state_dict = {k.replace("module.", ""): v for k, v in self.state_dict.items()}
+        self.state_dict = {
+            k.replace("module.", ""): v for k, v in self.state_dict.items()
+        }
         self.model.load_state_dict(self.state_dict)
         self.newly_added_num = self.tokenizer.add_special_tokens(
             {"additional_special_tokens": sorted(set(self.special_tokens_finetune))}
@@ -260,9 +248,7 @@ class TaskCrullerFinetuneRVLCDIP(TaskTrain):
 
         # We resize token embeddings after initializing
         if self.newly_added_num > 0:
-            self.model.text_decoder.trunk.resize_token_embeddings(
-                len(self.tokenizer)
-            )
+            self.model.text_decoder.trunk.resize_token_embeddings(len(self.tokenizer))
 
         self._setup_model()
         self._setup_optimization(

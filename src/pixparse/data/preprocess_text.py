@@ -5,6 +5,14 @@ import torch
 
 _logger = logging.getLogger(__name__)
 
+def text_input_to_target(text_input, tokenizer, prompt_end_token, ignore_id=-100):
+    target = text_input.clone()
+    # model doesn't need to predict pad token
+    target[target == tokenizer.pad_token_id] = ignore_id
+    # model doesn't need to predict prompt (for VQA)
+    prompt_end_token_id = tokenizer.convert_tokens_to_ids(prompt_end_token)
+    target[: torch.nonzero(target == prompt_end_token_id).sum() + 1] = ignore_id
+    return target
 
 def preprocess_text_anno(
         anno,
