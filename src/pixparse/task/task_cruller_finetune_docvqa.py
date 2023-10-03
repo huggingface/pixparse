@@ -1,41 +1,73 @@
 import logging
-from contextlib import nullcontext
-from dataclasses import dataclass, field, asdict
+from collections import OrderedDict
+from dataclasses import dataclass, field
 from functools import partial
-from typing import Optional, List, Any
+from typing import Any, Dict, Optional
 
 import numpy as np
-import torch
-from torch.utils.data import DataLoader
-import torch.nn as nn
-import torch.nn.functional as F
-
-import torchvision.transforms as transforms
-from torchvision.transforms import functional as transformsF
-from torchvision.transforms import Lambda
 import timm
 import timm.utils
-from timm.optim import create_optimizer_v2
-from timm.scheduler import create_scheduler_v2
+import torch
+import torch.nn as nn
+import torchvision.transforms as transforms
 
-from pixparse.framework import TaskTrainCfg, TaskTrain, DeviceEnv, Monitor
+from pixparse.data.loader import BaseCollate
+from pixparse.data import preprocess_ocr_anno, preprocess_text_anno, text_input_to_target
+from pixparse.framework import DeviceEnv, Monitor, TaskTrain, TaskTrainCfg
 from pixparse.models import Cruller, ModelCfg, get_model_config
-from pixparse.tokenizers import create_tokenizer, TokenizerCfg
-from pixparse.data import preprocess_ocr_anno, preprocess_text_anno
-from timm.layers import SelectAdaptivePool2d
-
-from typing import Dict, List
-
-from collections import OrderedDict
-
-from ast import literal_eval
-
-from pixparse.utils.json_utils import json2token, token2json
-
-from timm.data.constants import IMAGENET_DEFAULT_MEAN, IMAGENET_DEFAULT_STD
-from pixparse.utils.json_utils import JSONParseEvaluator
+from pixparse.tokenizers import TokenizerCfg, create_tokenizer
 
 _logger = logging.getLogger(__name__)
+
+
+class CollateDocVQA(BaseCollate):
+    """
+    basic collator for PIL images, as returned by docVQA dataloader (among others)
+    """
+
+    def __init__(
+        self,
+        tokenizer,
+        image_preprocess,
+        start_token,
+        max_length: int,
+        end_token,
+    ):
+        super().__init__(
+            tokenizer, image_preprocess, start_token, max_length=max_length
+        )
+        self.end_token = end_token
+
+    def __call__(self, batch):
+        images = [item["image"] for item in batch]
+        # question/answer tokens are already present in the data
+        q_and_as = [np.random.choice(item['labels']) for item in batch]  # TODO allow to change strategy here
+        labels_tokens = []
+        for text in q_and_as:
+            labels_tokens.append(self.tokenizer_fn(
+                self.start_token
+                + text
+                + self.tokenizer.eos_token
+            ))
+        return self.pack_inputs(images, labels_tokens)
+
+    def pack_inputs(self, images, labels_tokens):
+        images = torch.stack([self.image_preprocess(img) for img in images])
+        labels = torch.stack(labels_tokens)
+        targets = torch.stack(
+            [
+                text_input_to_target(
+                    text_input=text,
+                    tokenizer=self.tokenizer,
+                    prompt_end_token=self.end_token,
+                )
+                for text in labels
+            ]
+        )
+        labels = labels[:, :-1]
+        targets = targets[:, 1:]
+
+        return {"image": images, "label": labels, "text_target": targets}
 
 
 @dataclass
@@ -49,8 +81,8 @@ class TaskCrullerFinetuneDOCVQACfg(TaskTrainCfg):
     tokenizer: TokenizerCfg = field(default_factory=TokenizerCfg)
 
     def __post_init__(self):
-        # FIXME figure out how to get command line args to overlay on top pre-defined
-        # config but ONLY if they are specified on cmd line?
+        # FIXME figure out how to get command line args to overlay on top pre-defined config but ONLY if they are
+        # specified on cmd line?
         if self.model_name:
             model = get_model_config(self.model_name)
             if model is None:
@@ -76,9 +108,8 @@ class TaskCrullerFinetuneDOCVQA(TaskTrain):
             monitor=monitor,
         )
         self.cfg = cfg
-        # NOTE dtype is currently being used as 'amp dtype' only, ie the low precision type,
-        #  we may want to differentiate different precision modes such as
-        #  amp + dtype, pure float16/bfloat16, custom mixed prec, etc
+        # NOTE dtype is currently being used as 'amp dtype' only, ie the low precision type, we may want to
+        #  differentiate different precision modes such as amp + dtype, pure float16/bfloat16, custom mixed prec, etc
         self.amp_dtype = None
         if cfg.dtype is not None:
             self.amp_dtype = (
@@ -86,7 +117,7 @@ class TaskCrullerFinetuneDOCVQA(TaskTrain):
             )
 
         self.task_start_token = "<s_docvqa>"
-        self.prompt_end_token = "<s_answer>" # Slice prompt right before answer content
+        self.prompt_end_token = "<s_answer>"  # Slice prompt right before answer content
         self.max_position_embeddings = cfg.model.text_decoder.max_length
         self.text_anno_fn = True  # set for image-text dataset experiments
         self.tokenizer = create_tokenizer(cfg.tokenizer)
@@ -94,10 +125,9 @@ class TaskCrullerFinetuneDOCVQA(TaskTrain):
         self.state_dict = OrderedDict()
         self.resume = False
 
-        # Setup task specific tokens
-        # NOTE: Donut appears to add tokens on the fly during dataset init, requires iterating
-        # through full dataset on train start due to not being able to update once tokenizers
-        # passed through to dataloader processes, we should store this all in configs up front
+        # Setup task specific tokens NOTE: Donut appears to add tokens on the fly during dataset init, requires
+        # iterating through full dataset on train start due to not being able to update once tokenizers passed through
+        # to dataloader processes, we should store this all in configs up front
         self.special_tokens_finetune = [
             "<sep/>",  # JSON list separator
             self.task_start_token,  # task start (based on dataset/task)
@@ -151,8 +181,7 @@ class TaskCrullerFinetuneDOCVQA(TaskTrain):
             else img_std
         )
 
-        # preprocessors cross both the task/model & dataset domain,
-        # created within task here and passed to data loaders
+        # preprocessors cross both the task/model & dataset domain, created within task here and passed to data loaders
 
         image_size = cfg.model.image_encoder.image_size
         color_transform = transforms.Grayscale()
@@ -179,8 +208,8 @@ class TaskCrullerFinetuneDOCVQA(TaskTrain):
         num_batches_per_interval: int,
     ):
         """
-        FIXME this interface needs refinement
-        * currently, training duration is 'interval' based, where interval is either full dataset epoch, or
+        FIXME this interface needs refinement * currently, training duration is 'interval' based, where interval is
+        either full dataset epoch, or
             sampled with replacement periods, intervals correspond to checkpoint / eval periods
         * LR schedule is updated per-step, so num_steps_per_interval is required to translate intervals ->
             total steps for scheduling
@@ -193,12 +222,10 @@ class TaskCrullerFinetuneDOCVQA(TaskTrain):
         Returns:
 
         """
-        # FIXME currently thinking moving to device, setup DDP / FSDP makes sense
-        # in setup here vs in __init__(). For __init__ need the model structure to
-        # instantiate / setup tokenizer, other aspects. I don't think we need to init
-        # weights / move to device until here
-        #         if self.resume:
-        _logger.info(f"Resuming from existing checkpoint. ")
+        # FIXME currently thinking moving to device, setup DDP / FSDP makes sense in setup here vs in __init__(). For
+        # __init__ need the model structure to instantiate / setup tokenizer, other aspects. I don't think we need to
+        # init weights / move to device until here if self.resume:
+        _logger.info("Resuming from existing checkpoint.")
         self.state_dict = {k.replace("module.", ""): v for k, v in self.state_dict.items()}
         self.model.load_state_dict(self.state_dict)
         self.newly_added_num = self.tokenizer.add_special_tokens(
@@ -211,13 +238,13 @@ class TaskCrullerFinetuneDOCVQA(TaskTrain):
             self.model.text_decoder.trunk.resize_token_embeddings(
                 len(self.tokenizer)
             )
-        
+
         device = self.device_env.device
         self.model.to(device)
 
         if self.device_env.world_size > 1:
-            # NOTE: the plan is to add option for FSDP w/ HYBRID_SHARD strategy to extend
-            # model size capacity beyond DDP w/o overloading HF cluster NCCL throughput.
+            # NOTE: the plan is to add option for FSDP w/ HYBRID_SHARD strategy to extend model size capacity
+            #  beyond DDP w/o overloading HF cluster NCCL throughput.
             self.model = torch.nn.parallel.DistributedDataParallel(
                 self.model,
                 device_ids=[device],
@@ -227,54 +254,13 @@ class TaskCrullerFinetuneDOCVQA(TaskTrain):
 
         self._setup_optimization(num_batches_per_interval)
 
-    def text_input_to_target(self, text_input, ignore_id=-100):
-        target = text_input.clone()
-        # model doesn't need to predict pad token
-        target[target == self.tokenizer.pad_token_id] = ignore_id
-        # model doesn't need to predict prompt (for VQA)
-        prompt_end_token_id = self.tokenizer.convert_tokens_to_ids(
-            self.prompt_end_token
-        )
-        slice_id = torch.nonzero(target == prompt_end_token_id).sum() + 1
-        target[:slice_id] = ignore_id
-        return target
-
     def collate_fn(self, batch):
-        tokenizer_fn = lambda x: self.tokenizer(
-            x,
-            add_special_tokens=False,
-            return_tensors="pt",
-            max_length=512,
-            padding="max_length",
-            truncation=True,
-        ).input_ids[0]
-        images = [item['image'] for item in batch]
-        q_and_as = [np.random.choice(item['labels']) for item in batch]
-        
-        inputs_to_stack = []
-        for text in q_and_as:
-            inputs_to_stack.append(tokenizer_fn(
-                "<s_docvqa>"
-                + text
-                + self.tokenizer.eos_token
-            )) 
-        # Check max length here and truncate/pad if needed
-        # You could enforce it to be under or equal to a specific length
-
-        text_inputs = torch.stack(inputs_to_stack)
-        targets = torch.stack([self.text_input_to_target(text) for text in text_inputs])
-
-        transform = self.image_preprocess_train
-        images = torch.stack([transform(img) for img in images])
-        
-        text_inputs = text_inputs[:, :-1]
-        targets = targets[:, 1:]
-
-        return {
-            "image": images,
-            "label": text_inputs,
-            "text_target": targets,
-        }
+        return CollateDocVQA(
+            self.tokenizer,
+            self.image_preprocess_train,
+            self.task_start_token,
+            end_token=self.prompt_end_token
+        )
 
     def step(self, sample: Dict[str, Any]) -> Dict[str, Any]:
         image_input = sample["image"]
@@ -292,7 +278,7 @@ class TaskCrullerFinetuneDOCVQA(TaskTrain):
             with self.autocast():
                 output = self.model(image_input, label)
                 logits = output["logits"]
-                
+
                 loss = self.loss(
                     logits.view(-1, self.vocab_size),
                     text_target.view(-1),
@@ -357,5 +343,5 @@ class TaskCrullerFinetuneDOCVQA(TaskTrain):
             "tokenizer"
         ] = (
             self.tokenizer.state_dict()
-        ) # FIXME not needed anymore? we preprocess everything before
+        )  # FIXME not needed anymore? we preprocess everything before
         return state_dicts

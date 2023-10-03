@@ -1,40 +1,18 @@
 import logging
-from contextlib import nullcontext
-from dataclasses import dataclass, field, asdict
+from dataclasses import dataclass, field
 from functools import partial
-from typing import Optional, List, Any
+from typing import Any, Dict
 
 import torch
 import torch.nn as nn
 import torchvision.transforms as transforms
 
-import timm
-import timm.utils
-from timm.optim import create_optimizer_v2
-from timm.scheduler import create_scheduler_v2
-
-from pixparse.framework import (
-    TaskTrainCfg,
-    TaskTrain,
-    DeviceEnv,
-    Monitor,
-    OptimizationCfg,
-)
-from pixparse.models import Cruller, ModelCfg, get_model_config
-from pixparse.models import create_model, ModelArgs
-
-from pixparse.tokenizers import create_tokenizer, TokenizerCfg
-from pixparse.data import (
-    preprocess_ocr_anno,
-    preprocess_text_anno,
-    text_input_to_target,
-)
+from pixparse.data import (preprocess_ocr_anno, preprocess_text_anno,
+                           text_input_to_target)
 from pixparse.data.loader import BaseCollate
-from timm.layers import SelectAdaptivePool2d
-
-from typing import Dict, List
-
-from collections import OrderedDict
+from pixparse.framework import DeviceEnv, Monitor, TaskTrain, TaskTrainCfg
+from pixparse.models import Cruller, ModelArgs
+from pixparse.tokenizers import TokenizerCfg, create_tokenizer
 
 _logger = logging.getLogger(__name__)
 
@@ -130,9 +108,9 @@ class TaskCrullerFinetuneRVLCDIP(TaskTrain):
         self.tokenizer = create_tokenizer(cfg.tokenizer)
 
         # Setup task specific tokens
-        # NOTE: Donut appears to add tokens on the fly during dataset init, requires iterating
-        # through full dataset on train start due to not being able to update once tokenizers
-        # passed through to dataloader processes, we should store this all in configs up front
+        # NOTE: Donut appears to add tokens on the fly during dataset init, requires iterating through full dataset on
+        # train start due to not being able to update once tokenizers passed through to dataloader processes,
+        #  we should store this all in configs up front
         self.special_tokens_finetune = [
             "<sep/>",  # JSON list separator
             self.task_start_token,  # task start (based on dataset/task)
@@ -252,7 +230,7 @@ class TaskCrullerFinetuneRVLCDIP(TaskTrain):
         Returns:
 
         """
-        _logger.info(f"Resuming from existing checkpoint. ")
+        _logger.info("Resuming from existing checkpoint.")
         self.state_dict = {
             k.replace("module.", ""): v for k, v in self.state_dict.items()
         }

@@ -1,46 +1,24 @@
 import logging
-from contextlib import nullcontext
-from dataclasses import dataclass, field, asdict
+from ast import literal_eval
+from collections import OrderedDict
+from dataclasses import dataclass, field
 from functools import partial
-from typing import Optional, List, Any
+from typing import Any, Dict
 
 import torch
-from torch.utils.data import DataLoader
 import torch.nn as nn
-import torch.nn.functional as F
-
 import torchvision.transforms as transforms
-from torchvision.transforms import functional as transformsF
-from torchvision.transforms import Lambda
-import timm
-import timm.utils
-from timm.optim import create_optimizer_v2
-from timm.scheduler import create_scheduler_v2
-
-
-from pixparse.framework import TaskTrainCfg, TaskTrain, DeviceEnv, Monitor
-from pixparse.models import create_model, ModelArgs
-from pixparse.tokenizers import create_tokenizer, TokenizerCfg
-from pixparse.data import (
-    preprocess_ocr_anno,
-    preprocess_text_anno,
-    text_input_to_target,
-)
-from pixparse.utils.ocr_utils import get_ocr_metrics
-
-
-from typing import Dict, List
-
-from collections import OrderedDict
-
-from ast import literal_eval
-
-from pixparse.utils.json_utils import json2token, token2json
-from transformers import DonutProcessor, VisionEncoderDecoderModel
-
 from timm.data.constants import IMAGENET_DEFAULT_MEAN, IMAGENET_DEFAULT_STD
-from pixparse.utils.json_utils import JSONParseEvaluator
+from torchvision.transforms import Lambda
+from transformers import VisionEncoderDecoderModel
+
+from pixparse.data import (preprocess_ocr_anno, preprocess_text_anno,
+                           text_input_to_target)
 from pixparse.data.loader import BaseCollate
+from pixparse.framework import DeviceEnv, Monitor, TaskTrain, TaskTrainCfg
+from pixparse.models import ModelArgs, create_model
+from pixparse.tokenizers import TokenizerCfg, create_tokenizer
+from pixparse.utils.json_utils import json2token
 
 _logger = logging.getLogger(__name__)
 
@@ -106,7 +84,8 @@ class CollateCORD(BaseCollate):
 class TaskCrullerFinetuneCORDCfg(TaskTrainCfg):
     model: ModelArgs = field(
         default_factory=lambda: ModelArgs(
-            name="cruller_base",  # override model default in spec per task
+            name="cruller_base",
+            # override model default in spec per task
         )
     )
 
@@ -153,15 +132,14 @@ class TaskCrullerFinetuneCORD(TaskTrain):
             device_env=device_env,
             monitor=monitor,
         )
-        # NOTE dtype is currently being used as 'amp dtype' only, ie the low precision type,
-        #  we may want to differentiate different precision modes such as
-        #  amp + dtype, pure float16/bfloat16, custom mixed prec, etc
+        # NOTE dtype is currently being used as 'amp dtype' only, ie the low precision type, we may want to
+        #  differentiate different precision modes such as amp + dtype, pure float16/bfloat16, custom mixed prec, etc
         self.amp_dtype = None
         if cfg.dtype is not None:
             self.amp_dtype = (
                 torch.bfloat16 if cfg.dtype in ("bfloat16", "bf16") else torch.float16
             )
-
+        model_cfg = self.cfg.model.cfg
         self.task_start_token = "<s_cord>"
         self.prompt_end_token = self.task_start_token
         self.max_position_embeddings = cfg.model.text_decoder.max_length
@@ -171,15 +149,16 @@ class TaskCrullerFinetuneCORD(TaskTrain):
         self.state_dict = OrderedDict()
         self.resume = False
 
-        # Setup task specific tokens
-        # NOTE: Donut appears to add tokens on the fly during dataset init, requires iterating
-        # through full dataset on train start due to not being able to update once tokenizers
-        # passed through to dataloader processes, we should store this all in configs up front
+        # Setup task specific tokens NOTE: Donut appears to add tokens on the fly during dataset init, requires
+        # iterating through full dataset on train start due to not being able to update once tokenizers passed through
+        # to dataloader processes, we should store this all in configs up front
         self.special_tokens_finetune = [
             "<sep/>",  # JSON list separator
             self.task_start_token,  # task start (based on dataset/task)
             self.prompt_end_token,  # prompt end (or task_start for pretrain)
-            "</s_service_price>",  # This is only for CORD. To reproduce it, check pixparse.utils.dataset_utils.get_additional_tokens_from_dataset
+            "</s_service_price>",
+            # This is only for CORD.
+            # To reproduce it, check pixparse.utils.dataset_utils.get_additional_tokens_from_dataset
             "<s_subtotal_price>",
             "<s_discountprice>",
             "</s_sub>",
@@ -300,8 +279,7 @@ class TaskCrullerFinetuneCORD(TaskTrain):
             else img_std
         )
 
-        # preprocessors cross both the task/model & dataset domain,
-        # created within task here and passed to data loaders
+        # preprocessors cross both the task/model & dataset domain, created within task here and passed to data loaders
 
         if self.finetune_donut_weights:
             image_size = (1280, 960)
@@ -332,8 +310,8 @@ class TaskCrullerFinetuneCORD(TaskTrain):
         num_batches_per_interval: int,
     ):
         """
-        FIXME this interface needs refinement
-        * currently, training duration is 'interval' based, where interval is either full dataset epoch, or
+        FIXME this interface needs refinement * currently, training duration is 'interval' based, where interval is
+        either full dataset epoch, or
             sampled with replacement periods, intervals correspond to checkpoint / eval periods
         * LR schedule is updated per-step, so num_steps_per_interval is required to translate intervals ->
             total steps for scheduling
@@ -346,11 +324,9 @@ class TaskCrullerFinetuneCORD(TaskTrain):
         Returns:
 
         """
-        # FIXME currently thinking moving to device, setup DDP / FSDP makes sense
-        # in setup here vs in __init__(). For __init__ need the model structure to
-        # instantiate / setup tokenizer, other aspects. I don't think we need to init
-        # weights / move to device until here
-        #         if self.resume:
+        # FIXME currently thinking moving to device, setup DDP / FSDP makes sense in setup here vs in __init__(). For
+        # __init__ need the model structure to instantiate / setup tokenizer, other aspects. I don't think we need to
+        # init weights / move to device until here if self.resume:
         if self.finetune_donut_weights:
             # We just add tokens, weights of donut are already initialized
             self.newly_added_num = self.tokenizer.add_special_tokens(
@@ -362,7 +338,7 @@ class TaskCrullerFinetuneCORD(TaskTrain):
             if self.newly_added_num > 0:
                 self.model.decoder.resize_token_embeddings(len(self.tokenizer))
         else:
-            _logger.info(f"Resuming from existing checkpoint. ")
+            _logger.info("Resuming from existing checkpoint.")
             self.state_dict = {
                 k.replace("module.", ""): v for k, v in self.state_dict.items()
             }
@@ -382,8 +358,8 @@ class TaskCrullerFinetuneCORD(TaskTrain):
         self.model.to(device)
 
         if self.device_env.world_size > 1:
-            # NOTE: the plan is to add option for FSDP w/ HYBRID_SHARD strategy to extend
-            # model size capacity beyond DDP w/o overloading HF cluster NCCL throughput.
+            # NOTE: the plan is to add option for FSDP w/ HYBRID_SHARD strategy to extend model size capacity beyond DDP
+            # w/o overloading HF cluster NCCL throughput.
             self.model = torch.nn.parallel.DistributedDataParallel(
                 self.model,
                 device_ids=[device],
@@ -414,7 +390,10 @@ class TaskCrullerFinetuneCORD(TaskTrain):
             self.task_start_token,
         )
 
-    def _forward(self, image_input, target):
+    def _forward(self, sample: Dict[str, Any]):
+        image_input = sample["image"]
+        label = sample["label"]
+        text_target = sample["text_target"]
         with self.autocast():
             if self.finetune_donut_weights:
                 output = self.model(
@@ -432,8 +411,8 @@ class TaskCrullerFinetuneCORD(TaskTrain):
                 text_target.view(-1),
             )
 
-        if accum_steps > 1:
-            loss /= accum_steps
+        if self.cfg.opt.grad_accum_steps > 1:
+            loss /= self.cfg.opt.grad_accum_steps
         return loss
 
     def step(self, sample: Dict[str, Any]) -> Dict[str, Any]:
@@ -445,8 +424,7 @@ class TaskCrullerFinetuneCORD(TaskTrain):
         label = label.to(self.device_env.device, non_blocking=True)
         text_target = text_target.to(self.device_env.device, non_blocking=True)
 
-        accum_steps = self.cfg.opt.grad_accum_steps
-        need_update = (self.interval_batch_idx + 1) % accum_steps == 0
+        need_update = (self.interval_batch_idx + 1) % self.cfg.opt.grad_accum_steps == 0
 
         self.batch_idx += 1
         self.interval_batch_idx += 1
