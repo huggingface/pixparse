@@ -12,8 +12,7 @@ from timm.data.constants import IMAGENET_DEFAULT_MEAN, IMAGENET_DEFAULT_STD
 from torchvision.transforms import Lambda
 from transformers import VisionEncoderDecoderModel
 
-from pixparse.data import (preprocess_ocr_anno, preprocess_text_anno,
-                           text_input_to_target)
+from pixparse.data import preprocess_ocr_anno, preprocess_text_anno
 from pixparse.data.loader import BaseCollate
 from pixparse.framework import DeviceEnv, Monitor, TaskTrain, TaskTrainCfg
 from pixparse.models import ModelArgs, create_model
@@ -24,10 +23,19 @@ _logger = logging.getLogger(__name__)
 
 
 class CollateCORD(BaseCollate):
+    r"""
+    A collator for handling batches of PIL images and corresponding labels, as utilized with the CORDv2 dataset.
+    Strings returned will be the tokenized json file matching the annotation.
+    Args:
+        tokenizer (`Callable`):
+            Tokenizer function to convert textual labels into tokens.
+        image_preprocess (`Callable`):
+            method to perform preprocessing operations on images.
+        start_token (`str`):
+            A token that indicates the start of a sequence from the current task. <s_rvlcdip> for RVLCDIP, etc.
+        max_length (`int`):
+            Maximum length allowed for tokenized text sequences.
     """
-    basic collator for PIL images, as returned by CORD dataloader
-    """
-
     def __init__(
         self,
         tokenizer,
@@ -41,13 +49,14 @@ class CollateCORD(BaseCollate):
 
     def __call__(self, batch):
         images = [item["image"] for item in batch]
-        raw_texts = [literal_eval(item["ground_truth"])["gt_parse"] for item in batch]
-        inputs_to_stack = []
+        raw_texts = [literal_eval(item["ground_truth"])[
+            "gt_parse"] for item in batch]
+        labels_tokens = []
         for text in raw_texts:
             tokens_from_json, _ = json2token(
                 text, self.tokenizer.all_special_tokens, sort_json_key=False
             )
-            inputs_to_stack.append(
+            labels_tokens.append(
                 self.tokenizer_fn(
                     self.start_token
                     # + self.tokenizer.bos_token
@@ -55,29 +64,10 @@ class CollateCORD(BaseCollate):
                     + self.tokenizer.eos_token
                 )
             )
-        return self.pack_inputs(images, inputs_to_stack)
-
-    def pack_inputs(self, images, inputs_to_stack):
-        text_inputs = torch.stack(inputs_to_stack)
-        targets = torch.stack(
-            [
-                text_input_to_target(
-                    text_input=text,
-                    tokenizer=self.tokenizer,
-                    prompt_end_token=self.start_token,
-                )
-                for text in text_inputs
-            ]
+        return self.pack_inputs(
+            images,
+            labels_tokens
         )
-
-        images = torch.stack([self.image_preprocess(img) for img in images])
-        text_inputs = text_inputs[:, :-1]
-        targets = targets[:, 1:]
-        return {
-            "image": images,
-            "label": text_inputs,
-            "text_target": targets,
-        }
 
 
 @dataclass
@@ -93,7 +83,8 @@ class TaskCrullerFinetuneCORDCfg(TaskTrainCfg):
         assert self.model.cfg is not None
         if self.tokenizer is None:
             # set tokenizer to text tower model name if not explicitly set
-            self.tokenizer = TokenizerCfg(name=self.model.cfg.text_decoder.name)
+            self.tokenizer = TokenizerCfg(
+                name=self.model.cfg.text_decoder.name)
 
 
 def prepare_inputs_for_inference(
@@ -137,7 +128,8 @@ class TaskCrullerFinetuneCORD(TaskTrain):
         self.amp_dtype = None
         if cfg.dtype is not None:
             self.amp_dtype = (
-                torch.bfloat16 if cfg.dtype in ("bfloat16", "bf16") else torch.float16
+                torch.bfloat16 if cfg.dtype in (
+                    "bfloat16", "bf16") else torch.float16
             )
         model_cfg = self.cfg.model.cfg
         self.task_start_token = "<s_cord>"
@@ -227,12 +219,12 @@ class TaskCrullerFinetuneCORD(TaskTrain):
         """
 
         self.finetune_donut_weights = False
-        _logger.info(f"Finetuning donut weights? {self.finetune_donut_weights}")
+        _logger.info(
+            f"Finetuning donut weights? {self.finetune_donut_weights}")
 
         if self.finetune_donut_weights:
             self.model = VisionEncoderDecoderModel.from_pretrained(
-                "naver-clova-ix/donut-base"
-            )
+                "naver-clova-ix/donut-base")
         else:
             self.model = create_model(
                 model_cfg,
@@ -244,8 +236,7 @@ class TaskCrullerFinetuneCORD(TaskTrain):
             ]
 
             num_tokens_from_pretrain = self.tokenizer.add_special_tokens(
-                {"additional_special_tokens": sorted(set(special_tokens_from_pretrain))}
-            )
+                {"additional_special_tokens": sorted(set(special_tokens_from_pretrain))})
             # need to resize embeddings from pretrained model in order to load it
             if num_tokens_from_pretrain > 0:
                 self.model.text_decoder.trunk.resize_token_embeddings(
@@ -330,7 +321,8 @@ class TaskCrullerFinetuneCORD(TaskTrain):
         if self.finetune_donut_weights:
             # We just add tokens, weights of donut are already initialized
             self.newly_added_num = self.tokenizer.add_special_tokens(
-                {"additional_special_tokens": sorted(set(self.special_tokens_finetune))}
+                {"additional_special_tokens": sorted(
+                    set(self.special_tokens_finetune))}
             )
             self.vocab_size = len(self.tokenizer)
 
@@ -344,7 +336,8 @@ class TaskCrullerFinetuneCORD(TaskTrain):
             }
             self.model.load_state_dict(self.state_dict)
             self.newly_added_num = self.tokenizer.add_special_tokens(
-                {"additional_special_tokens": sorted(set(self.special_tokens_finetune))}
+                {"additional_special_tokens": sorted(
+                    set(self.special_tokens_finetune))}
             )
             self.vocab_size = len(self.tokenizer)
 
@@ -370,18 +363,6 @@ class TaskCrullerFinetuneCORD(TaskTrain):
         self._setup_optimization(
             num_batches_per_interval=num_batches_per_interval,
         )
-
-    def text_input_to_target(self, text_input, ignore_id=-100):
-        target = text_input.clone()
-        # model doesn't need to predict pad token
-        target[target == self.tokenizer.pad_token_id] = ignore_id
-        # model doesn't need to predict prompt (for VQA)
-        prompt_end_token_id = self.tokenizer.convert_tokens_to_ids(
-            self.prompt_end_token
-        )
-        slice_id = torch.nonzero(target == prompt_end_token_id).sum() + 1
-        target[:slice_id] = ignore_id
-        return target
 
     def collate_fn(self, batch):
         return CollateCORD(
@@ -424,7 +405,8 @@ class TaskCrullerFinetuneCORD(TaskTrain):
         label = label.to(self.device_env.device, non_blocking=True)
         text_target = text_target.to(self.device_env.device, non_blocking=True)
 
-        need_update = (self.interval_batch_idx + 1) % self.cfg.opt.grad_accum_steps == 0
+        need_update = (self.interval_batch_idx +
+                       1) % self.cfg.opt.grad_accum_steps == 0
 
         self.batch_idx += 1
         self.interval_batch_idx += 1

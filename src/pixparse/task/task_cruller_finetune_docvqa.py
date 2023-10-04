@@ -12,7 +12,7 @@ import torch.nn as nn
 import torchvision.transforms as transforms
 
 from pixparse.data.loader import BaseCollate
-from pixparse.data import preprocess_ocr_anno, preprocess_text_anno, text_input_to_target
+from pixparse.data import preprocess_ocr_anno, preprocess_text_anno
 from pixparse.framework import DeviceEnv, Monitor, TaskTrain, TaskTrainCfg
 from pixparse.models import Cruller, ModelCfg, get_model_config
 from pixparse.tokenizers import TokenizerCfg, create_tokenizer
@@ -21,10 +21,19 @@ _logger = logging.getLogger(__name__)
 
 
 class CollateDocVQA(BaseCollate):
+    r"""
+    A collator for handling batches of PIL images and corresponding labels, as utilized with the SinglePageDocVQA dataset.
+    Strings returned will be <s_docvqa><s><question>...question...?</s_question><s_answer>...answer.<s_answer></s>
+    Args:
+        tokenizer (`Callable`):
+            Tokenizer function to convert textual labels into tokens.
+        image_preprocess (`Callable`):
+            method to perform preprocessing operations on images.
+        start_token (`str`):
+            A token that indicates the start of a sequence from the current task. <s_rvlcdip> for RVLCDIP, etc.
+        max_length (`int`):
+            Maximum length allowed for tokenized text sequences.
     """
-    basic collator for PIL images, as returned by docVQA dataloader (among others)
-    """
-
     def __init__(
         self,
         tokenizer,
@@ -49,25 +58,10 @@ class CollateDocVQA(BaseCollate):
                 + text
                 + self.tokenizer.eos_token
             ))
-        return self.pack_inputs(images, labels_tokens)
-
-    def pack_inputs(self, images, labels_tokens):
-        images = torch.stack([self.image_preprocess(img) for img in images])
-        labels = torch.stack(labels_tokens)
-        targets = torch.stack(
-            [
-                text_input_to_target(
-                    text_input=text,
-                    tokenizer=self.tokenizer,
-                    prompt_end_token=self.end_token,
-                )
-                for text in labels
-            ]
+        return self.pack_inputs(
+            images,
+            labels_tokens
         )
-        labels = labels[:, :-1]
-        targets = targets[:, 1:]
-
-        return {"image": images, "label": labels, "text_target": targets}
 
 
 @dataclass

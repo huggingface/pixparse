@@ -1,14 +1,30 @@
 from typing import Callable
 
-from chug import create_wds_loader, create_doc_anno_pipe
+import torch
+from chug import create_doc_anno_pipe, create_wds_loader
 from chug.common import LoaderBundle
 from torch.utils.data import DataLoader, DistributedSampler
 
-from pixparse.data.datasets_utils import SafeDataset, CustomVQADataset
+from pixparse.data import text_input_to_target
+from pixparse.data.datasets_utils import CustomVQADataset, SafeDataset
+
 from .config import DataCfg
 
 
 class BaseCollate:
+    r"""
+    A base class intended to be inherited for custom batch collation.
+
+    Args:
+        tokenizer (`Callable`):
+            A function or method that performs tokenization on textual input.
+        image_preprocess (`Callable`):
+            A function or method that performs preprocessing on image data.
+        start_token (`str`):
+            A token indicating the start of a text sequence.
+        max_length (`int`, *optional*, defaults to `512`):
+            Specifies the maximum length of tokenized text sequences.
+    """
     def __init__(
         self, tokenizer, image_preprocess, start_token: str, max_length: int = 512
     ):
@@ -30,6 +46,40 @@ class BaseCollate:
     def __call__(self, batch):
         # TODO add item["image"], item["label"] as default?
         raise NotImplementedError("This method should be overridden by child classes")
+
+    def pack_inputs(self, images, labels_tokens):
+        r"""
+        Stacks and processes images and label tokens into a format suitable for model training.
+
+        Images are stacked into a single tensor after preprocessing, while labels and targets
+        are also stacked into their respective tensors. Labels are processed to targets as well.
+
+        Args:
+            images (`list` of `Image`):
+                A list of PIL Image objects.
+            labels_tokens (`list` of `Tensor`):
+                A list of tensors containing tokenized labels.
+
+        Returns:
+            `dict`:
+                A dictionary containing processed images, labels, and text targets.
+        """
+        images = torch.stack([self.image_preprocess(img) for img in images])
+        labels = torch.stack(labels_tokens)
+        targets = torch.stack(
+            [
+                text_input_to_target(
+                    text_input=text,
+                    tokenizer=self.tokenizer,
+                    prompt_end_token=self.start_token,
+                )
+                for text in labels
+            ]
+        )
+        labels = labels[:, :-1]
+        targets = targets[:, 1:]
+
+        return {"image": images, "label": labels, "text_target": targets}
 
 
 class GenericLoader(DataLoader):
@@ -101,8 +151,7 @@ def create_loader(
             world_size=world_size,
         )
     elif cfg.format == "hf_dataset":
-        from datasets import VerificationMode
-        from datasets import load_dataset
+        from datasets import VerificationMode, load_dataset
 
         # In the case of hf datasets, we use the collator defined at task level
         if cfg.source == "SinglePageDocVQA":

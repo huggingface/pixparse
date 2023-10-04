@@ -3,12 +3,10 @@ from dataclasses import dataclass, field
 from functools import partial
 from typing import Any, Dict
 
-import torch
 import torch.nn as nn
 import torchvision.transforms as transforms
 
-from pixparse.data import (preprocess_ocr_anno, preprocess_text_anno,
-                           text_input_to_target)
+from pixparse.data import (preprocess_ocr_anno, preprocess_text_anno)
 from pixparse.data.loader import BaseCollate
 from pixparse.framework import DeviceEnv, Monitor, TaskTrain, TaskTrainCfg
 from pixparse.models import Cruller, ModelArgs
@@ -23,8 +21,20 @@ class GetCLSToken(nn.Module):
 
 
 class CollateRVLCDIP(BaseCollate):
-    """
-    basic collator for PIL images, as returned by rvlcdip dataloader (among others)
+    r"""
+    A collator for handling batches of PIL images and corresponding labels, as utilized with the RVL-CDIP dataset.
+    Converts class labels to tokens and returns a string.
+    Args:
+        tokenizer (`Callable`):
+            Tokenizer function to convert textual labels into tokens.
+        image_preprocess (`Callable`):
+            method to perform preprocessing operations on images.
+        start_token (`str`):
+            A token that indicates the start of a sequence from the current task. <s_rvlcdip> for RVLCDIP, etc.
+        max_length (`int`):
+            Maximum length allowed for tokenized text sequences.
+        label_int2str (`dict`):
+            A mapping from integer labels to string representations.
     """
 
     def __init__(
@@ -53,25 +63,10 @@ class CollateRVLCDIP(BaseCollate):
             )
             for label in labels
         ]
-        return self.pack_inputs(images, labels_tokens)
-
-    def pack_inputs(self, images, labels_tokens):
-        images = torch.stack([self.image_preprocess(img) for img in images])
-        labels = torch.stack(labels_tokens)
-        targets = torch.stack(
-            [
-                text_input_to_target(
-                    text_input=text,
-                    tokenizer=self.tokenizer,
-                    prompt_end_token=self.start_token,
-                )
-                for text in labels
-            ]
+        return self.pack_inputs(
+            images,
+            labels_tokens
         )
-        labels = labels[:, :-1]
-        targets = targets[:, 1:]
-
-        return {"image": images, "label": labels, "text_target": targets}
 
 
 @dataclass
@@ -86,7 +81,8 @@ class TaskCrullerFinetuneRVLCDIPCfg(TaskTrainCfg):
         assert self.model.cfg is not None
         if self.tokenizer is None:
             # set tokenizer to text tower model name if not explicitly set
-            self.tokenizer = TokenizerCfg(name=self.model.cfg.text_decoder.name)
+            self.tokenizer = TokenizerCfg(
+                name=self.model.cfg.text_decoder.name)
 
 
 class TaskCrullerFinetuneRVLCDIP(TaskTrain):
@@ -163,18 +159,21 @@ class TaskCrullerFinetuneRVLCDIP(TaskTrain):
             prompt_end_token=self.prompt_end_token,
         )
 
-        self.model = Cruller(cfg.model)  # FIXME would be good to defer weight init here
+        # FIXME would be good to defer weight init here
+        self.model = Cruller(cfg.model)
 
         special_tokens_from_pretrain = [
             "<sep/>",  # JSON list separator
             "<s_pretrain>",  # task start (based on dataset/task)
         ]
         num_tokens_from_pretrain = self.tokenizer.add_special_tokens(
-            {"additional_special_tokens": sorted(set(special_tokens_from_pretrain))}
+            {"additional_special_tokens": sorted(
+                set(special_tokens_from_pretrain))}
         )
         # need to resize embeddings from pretrained model in order to load it
         if num_tokens_from_pretrain > 0:
-            self.model.text_decoder.trunk.resize_token_embeddings(len(self.tokenizer))
+            self.model.text_decoder.trunk.resize_token_embeddings(
+                len(self.tokenizer))
 
         self.loss = nn.CrossEntropyLoss(ignore_index=-100)
 
@@ -236,13 +235,15 @@ class TaskCrullerFinetuneRVLCDIP(TaskTrain):
         }
         self.model.load_state_dict(self.state_dict)
         self.newly_added_num = self.tokenizer.add_special_tokens(
-            {"additional_special_tokens": sorted(set(self.special_tokens_finetune))}
+            {"additional_special_tokens": sorted(
+                set(self.special_tokens_finetune))}
         )
         self.vocab_size = len(self.tokenizer)
 
         # We resize token embeddings after initializing
         if self.newly_added_num > 0:
-            self.model.text_decoder.trunk.resize_token_embeddings(len(self.tokenizer))
+            self.model.text_decoder.trunk.resize_token_embeddings(
+                len(self.tokenizer))
 
         self._setup_model()
         self._setup_optimization(
