@@ -55,18 +55,8 @@ class CollateCORD(BaseCollate):
             tokens_from_json, _ = json2token(
                 text, self.tokenizer.all_special_tokens, sort_json_key=False
             )
-            labels_tokens.append(
-                self.tokenizer_fn(
-                    self.start_token
-                    # + self.tokenizer.bos_token
-                    + tokens_from_json
-                    + self.tokenizer.eos_token
-                )
-            )
-        return self.pack_inputs(
-            images,
-            labels_tokens
-        )
+            labels_tokens.append(self.tokenizer_fn(self.start_token + tokens_from_json + self.tokenizer.eos_token))
+        return self.pack_inputs(images, labels_tokens)
 
 
 @dataclass

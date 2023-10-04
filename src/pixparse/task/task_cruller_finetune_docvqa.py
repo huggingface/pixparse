@@ -139,9 +139,7 @@ class TaskCrullerFinetuneDOCVQA(TaskTrain):
         )
         # need to resize embeddings from pretrained model in order to load it
         if num_tokens_from_pretrain > 0:
-            self.model.text_decoder.trunk.resize_token_embeddings(
-                len(self.tokenizer)
-            )
+            self.model.text_decoder.trunk.resize_token_embeddings(len(self.tokenizer))
 
         self.loss = nn.CrossEntropyLoss(ignore_index=-100)
         self.has_no_sync = False
