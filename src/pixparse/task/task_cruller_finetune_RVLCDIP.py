@@ -296,6 +296,12 @@ class TaskCrullerFinetuneRVLCDIP(TaskTrain):
 
     def after_step(self, sample, output, loss):
         if self.step_idx % self.metrics_frequency == 0:
+            # TODO add metrics and possibly eval_gallery for finetuning
+            self.train_metrics = None
+            eval_gallery = None
+            metrics_updated = True
+
+        if self.step_idx % self.metrics_frequency == 0:
             self.monitor.log_step(
                 "finetune",
                 step_idx=self.step_idx,
@@ -303,6 +309,6 @@ class TaskCrullerFinetuneRVLCDIP(TaskTrain):
                 interval=self.interval_idx,
                 loss=loss.item(),
                 lr=self.get_current_lr(),
-                metrics=None,
-                eval_data=None,
+                metrics=self.train_metrics if metrics_updated else None,
+                eval_data=eval_gallery if metrics_updated else None,
             )
