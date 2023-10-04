@@ -34,7 +34,7 @@ class TaskCfg:
 class TaskTrainCfg(TaskCfg):
     model: ModelArgs = field(default_factory=ModelArgs)
     tokenizer: Optional[TokenizerCfg] = None
-
+    image_transforms: str = "nougat"  # Can be "better", "nougat" or ""
     num_intervals: int = 100
     num_warmup_intervals: int = 5
     log_frequency: int = 100  # log every n steps

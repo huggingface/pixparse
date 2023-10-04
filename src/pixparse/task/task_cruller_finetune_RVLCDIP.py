@@ -16,7 +16,7 @@ from timm.scheduler import create_scheduler_v2
 from pixparse.framework import TaskTrainCfg, TaskTrain, DeviceEnv, Monitor, OptimizationCfg
 from pixparse.models import Cruller, ModelCfg, get_model_config
 from pixparse.tokenizers import create_tokenizer, TokenizerCfg
-from pixparse.data import preprocess_ocr_anno, preprocess_text_anno
+from pixparse.data import preprocess_ocr_anno, preprocess_text_anno, create_transforms
 from timm.layers import SelectAdaptivePool2d
 
 from typing import Dict, List
@@ -200,35 +200,14 @@ class TaskCrullerFinetuneRVLCDIP(TaskTrain):
 
         # TODO refactor, used in many tasks
         self.num_image_chs = 1 if cfg.model.image_encoder.image_fmt == "L" else 3
-        img_mean = self.model.image_encoder.trunk.pretrained_cfg["mean"]
-        img_std = self.model.image_encoder.trunk.pretrained_cfg["std"]
-        self.img_mean = (
-            sum(img_mean) / len(img_mean)
-            if cfg.model.image_encoder.image_fmt == "L"
-            else img_mean
-        )
-        self.img_std = (
-            sum(img_std) / len(img_std)
-            if cfg.model.image_encoder.image_fmt == "L"
-            else img_std
-        )
-
-        # preprocessors cross both the task/model & dataset domain,
-        # created within task here and passed to data loaders
-        self.image_preprocess_train = transforms.Compose(
-            [
-                transforms.ToTensor(),
-                transforms.Resize(
-                    cfg.model.image_encoder.image_size,
-                    interpolation=transforms.InterpolationMode.BICUBIC,
-                    antialias=True,
-                ),
-                # transforms.CenterCrop(448),  # FIXME need better aspect preserving resize & pad
-                transforms.Normalize(
-                    mean=self.img_mean,
-                    std=self.img_std,
-                ),
-            ]
+        self.image_input_cfg = self.model.image_encoder.traits.get('input')
+        self.image_preprocess_train = create_transforms(
+            self.cfg.image_transforms,
+            input_cfg=self.image_input_cfg,
+            training=True,
+            interpolation='bicubic',
+            crop_margin=False,  # True?
+            align_long_axis=False,
         )
 
     def setup(

@@ -20,7 +20,7 @@ from timm.scheduler import create_scheduler_v2
 from pixparse.framework import TaskTrainCfg, TaskTrain, DeviceEnv, Monitor
 from pixparse.models import Cruller, ModelCfg, get_model_config
 from pixparse.tokenizers import create_tokenizer, TokenizerCfg
-from pixparse.data import preprocess_ocr_anno, preprocess_text_anno
+from pixparse.data import preprocess_ocr_anno, preprocess_text_anno, create_transforms
 from timm.layers import SelectAdaptivePool2d
 
 from typing import Dict, List
@@ -125,7 +125,7 @@ class TaskCrullerFinetuneCORD(TaskTrain):
             "<sep/>",  # JSON list separator
             self.task_start_token,  # task start (based on dataset/task)
             self.prompt_end_token,  # prompt end (or task_start for pretrain)
-            "</s_service_price>", # This is only for CORD. To reproduce it, check pixparse.utils.dataset_utils.get_additional_tokens_from_dataset
+            "</s_service_price>",  # This is only for CORD. To reproduce it, check pixparse.utils.dataset_utils.get_additional_tokens_from_dataset
             "<s_subtotal_price>",
             "<s_discountprice>",
             "</s_sub>",
@@ -222,51 +222,17 @@ class TaskCrullerFinetuneCORD(TaskTrain):
         else:
             self.num_image_chs = 1 if cfg.model.image_encoder.image_fmt == "L" else 3
 
-        # TODO refactor, used in many tasks
-        if self.finetune_donut_weights:
-            img_mean = IMAGENET_DEFAULT_MEAN
-            img_std = IMAGENET_DEFAULT_STD
-        else:
-            img_mean = self.model.image_encoder.trunk.pretrained_cfg["mean"]
-            img_std = self.model.image_encoder.trunk.pretrained_cfg["std"]
-
-        self.img_mean = (
-            sum(img_mean) / len(img_mean)
-            if cfg.model.image_encoder.image_fmt == "L"
-            else img_mean
-        )
-
-        self.img_std = (
-            sum(img_std) / len(img_std)
-            if cfg.model.image_encoder.image_fmt == "L"
-            else img_std
-        )
-
         # preprocessors cross both the task/model & dataset domain,
         # created within task here and passed to data loaders
 
-        if self.finetune_donut_weights:
-            image_size = (1280, 960)
-            color_transform = Lambda(lambda x: x)
-        else:
-            image_size = cfg.model.image_encoder.image_size
-            color_transform = transforms.Grayscale()
-
-        self.image_preprocess_train = transforms.Compose(
-            [
-                transforms.ToTensor(),
-                color_transform,
-                transforms.Resize(
-                    image_size,
-                    interpolation=transforms.InterpolationMode.BICUBIC,
-                    antialias=True,
-                ),
-                # transforms.CenterCrop(448),  # FIXME need better aspect preserving resize & pad
-                transforms.Normalize(
-                    mean=self.img_mean,
-                    std=self.img_std,
-                ),
-            ]
+        self.image_input_cfg = self.model.image_encoder.traits.get('input')
+        self.image_preprocess_train = create_transforms(
+            self.cfg.image_transforms,
+            input_cfg=self.image_input_cfg,
+            training=True,
+            interpolation='bicubic',
+            crop_margin=False,  # True?
+            align_long_axis=False,
         )
 
     def setup(
@@ -319,7 +285,7 @@ class TaskCrullerFinetuneCORD(TaskTrain):
                 self.model.text_decoder.trunk.resize_token_embeddings(
                     len(self.tokenizer)
                 )
-            
+
         device = self.device_env.device
         self.model.to(device)
 
@@ -353,7 +319,7 @@ class TaskCrullerFinetuneCORD(TaskTrain):
         """
         basic collator for PIL images, as returned by rvlcdip dataloader (among others)
         """
-        tokenizer_fn = lambda x: self.tokenizer(
+        def tokenizer_fn(x): return self.tokenizer(
             x,  # FIXME move this batcher/tokenizer elsewhere
             add_special_tokens=False,
             return_tensors="pt",
@@ -369,7 +335,7 @@ class TaskCrullerFinetuneCORD(TaskTrain):
             tokens_from_json, _ = json2token(text, self.tokenizer.all_special_tokens, sort_json_key=False)
             inputs_to_stack.append(tokenizer_fn(
                 self.task_start_token
-                #+ self.tokenizer.bos_token
+                # + self.tokenizer.bos_token
                 + tokens_from_json
                 + self.tokenizer.eos_token
             ))
@@ -386,7 +352,7 @@ class TaskCrullerFinetuneCORD(TaskTrain):
             "image": images,
             "label": text_inputs,
             "text_target": targets,
-        }  
+        }
 
     def _forward(self, image_input, target):
         with self.autocast():
@@ -418,7 +384,6 @@ class TaskCrullerFinetuneCORD(TaskTrain):
         accum_steps = self.cfg.opt.grad_accum_steps
         need_update = (self.interval_batch_idx + 1) % accum_steps == 0
 
-
         self.batch_idx += 1
         self.interval_batch_idx += 1
         if self.step % 100 == 0:
@@ -440,7 +405,6 @@ class TaskCrullerFinetuneCORD(TaskTrain):
         self.scheduler.step_update(self.step)
         self.optimizer.zero_grad()
 
-
     def state_dict(self):
         state_dicts = {}
         state_dicts["model"] = self.model.state_dict()
@@ -448,5 +412,5 @@ class TaskCrullerFinetuneCORD(TaskTrain):
             "tokenizer"
         ] = (
             self.tokenizer.state_dict()
-        ) # FIXME not needed anymore? we preprocess everything before
+        )  # FIXME not needed anymore? we preprocess everything before
         return state_dicts
