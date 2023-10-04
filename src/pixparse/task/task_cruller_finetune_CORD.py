@@ -36,6 +36,7 @@ class CollateCORD(BaseCollate):
         max_length (`int`):
             Maximum length allowed for tokenized text sequences.
     """
+
     def __init__(
         self,
         tokenizer,
@@ -43,9 +44,7 @@ class CollateCORD(BaseCollate):
         start_token,
         max_length: int,
     ):
-        super().__init__(
-            tokenizer, image_preprocess, start_token, max_length=max_length
-        )
+        super().__init__(tokenizer, image_preprocess, start_token, max_length=max_length)
 
     def __call__(self, batch):
         images = [item["image"] for item in batch]
@@ -72,12 +71,8 @@ class CollateCORD(BaseCollate):
 
 @dataclass
 class TaskCrullerFinetuneCORDCfg(TaskTrainCfg):
-    model: ModelArgs = field(
-        default_factory=lambda: ModelArgs(
-            name="cruller_base",
-            # override model default in spec per task
-        )
-    )
+    # override model default in spec per task
+    model: ModelArgs = field(default_factory=lambda: ModelArgs(name="cruller_base",))
 
     def __post_init__(self):
         assert self.model.cfg is not None
@@ -258,17 +253,9 @@ class TaskCrullerFinetuneCORD(TaskTrain):
             img_mean = self.model.image_encoder.trunk.pretrained_cfg["mean"]
             img_std = self.model.image_encoder.trunk.pretrained_cfg["std"]
 
-        self.img_mean = (
-            sum(img_mean) / len(img_mean)
-            if cfg.model.image_encoder.image_fmt == "L"
-            else img_mean
-        )
+        self.img_mean = (sum(img_mean) / len(img_mean) if cfg.model.image_encoder.image_fmt == "L" else img_mean)
 
-        self.img_std = (
-            sum(img_std) / len(img_std)
-            if cfg.model.image_encoder.image_fmt == "L"
-            else img_std
-        )
+        self.img_std = (sum(img_std) / len(img_std) if cfg.model.image_encoder.image_fmt == "L" else img_std)
 
         # preprocessors cross both the task/model & dataset domain, created within task here and passed to data loaders
 
@@ -296,10 +283,7 @@ class TaskCrullerFinetuneCORD(TaskTrain):
             ]
         )
 
-    def setup(
-        self,
-        num_batches_per_interval: int,
-    ):
+    def setup(self, num_batches_per_interval: int, ):
         """
         FIXME this interface needs refinement * currently, training duration is 'interval' based, where interval is
         either full dataset epoch, or
@@ -321,9 +305,7 @@ class TaskCrullerFinetuneCORD(TaskTrain):
         if self.finetune_donut_weights:
             # We just add tokens, weights of donut are already initialized
             self.newly_added_num = self.tokenizer.add_special_tokens(
-                {"additional_special_tokens": sorted(
-                    set(self.special_tokens_finetune))}
-            )
+                {"additional_special_tokens": sorted(set(self.special_tokens_finetune))})
             self.vocab_size = len(self.tokenizer)
 
             # We resize token embeddings after initializing
@@ -331,9 +313,7 @@ class TaskCrullerFinetuneCORD(TaskTrain):
                 self.model.decoder.resize_token_embeddings(len(self.tokenizer))
         else:
             _logger.info("Resuming from existing checkpoint.")
-            self.state_dict = {
-                k.replace("module.", ""): v for k, v in self.state_dict.items()
-            }
+            self.state_dict = {k.replace("module.", ""): v for k, v in self.state_dict.items()}
             self.model.load_state_dict(self.state_dict)
             self.newly_added_num = self.tokenizer.add_special_tokens(
                 {"additional_special_tokens": sorted(
@@ -377,11 +357,7 @@ class TaskCrullerFinetuneCORD(TaskTrain):
         text_target = sample["text_target"]
         with self.autocast():
             if self.finetune_donut_weights:
-                output = self.model(
-                    pixel_values=image_input,
-                    decoder_input_ids=label,
-                    labels=text_target,
-                )
+                output = self.model(pixel_values=image_input, decoder_input_ids=label, labels=text_target)
                 logits = output["logits"]
             else:
                 output = self.model(image_input, label)
@@ -405,8 +381,7 @@ class TaskCrullerFinetuneCORD(TaskTrain):
         label = label.to(self.device_env.device, non_blocking=True)
         text_target = text_target.to(self.device_env.device, non_blocking=True)
 
-        need_update = (self.interval_batch_idx +
-                       1) % self.cfg.opt.grad_accum_steps == 0
+        need_update = (self.interval_batch_idx + 1) % self.cfg.opt.grad_accum_steps == 0
 
         self.batch_idx += 1
         self.interval_batch_idx += 1
@@ -432,9 +407,6 @@ class TaskCrullerFinetuneCORD(TaskTrain):
     def state_dict(self):
         state_dicts = {}
         state_dicts["model"] = self.model.state_dict()
-        state_dicts[
-            "tokenizer"
-        ] = (
-            self.tokenizer.state_dict()
-        )  # FIXME not needed anymore? we preprocess everything before
+        state_dicts["tokenizer"] = (self.tokenizer.state_dict())
+        # FIXME not needed anymore? we preprocess everything before
         return state_dicts

@@ -22,7 +22,8 @@ _logger = logging.getLogger(__name__)
 
 class CollateDocVQA(BaseCollate):
     r"""
-    A collator for handling batches of PIL images and corresponding labels, as utilized with the SinglePageDocVQA dataset.
+    A collator for handling batches of PIL images and corresponding labels
+    as utilized with the SinglePageDocVQA dataset.
     Strings returned will be <s_docvqa><s><question>...question...?</s_question><s_answer>...answer.<s_answer></s>
     Args:
         tokenizer (`Callable`):
@@ -34,6 +35,7 @@ class CollateDocVQA(BaseCollate):
         max_length (`int`):
             Maximum length allowed for tokenized text sequences.
     """
+
     def __init__(
         self,
         tokenizer,
@@ -53,25 +55,14 @@ class CollateDocVQA(BaseCollate):
         q_and_as = [np.random.choice(item['labels']) for item in batch]  # TODO allow to change strategy here
         labels_tokens = []
         for text in q_and_as:
-            labels_tokens.append(self.tokenizer_fn(
-                self.start_token
-                + text
-                + self.tokenizer.eos_token
-            ))
-        return self.pack_inputs(
-            images,
-            labels_tokens
-        )
+            labels_tokens.append(self.tokenizer_fn(self.start_token + text + self.tokenizer.eos_token))
+        return self.pack_inputs(images, labels_tokens)
 
 
 @dataclass
 class TaskCrullerFinetuneDOCVQACfg(TaskTrainCfg):
-    model_name: Optional[
-        str
-    ] = None  # if model_name set, loads a pre-defined config in models/configs
-    model: ModelCfg = field(
-        default_factory=ModelCfg
-    )  # FIXME rename model_cfg to diff from model_name?
+    model_name: Optional[str] = None  # if model_name set, loads a pre-defined config in models/configs
+    model: ModelCfg = field(default_factory=ModelCfg)  # FIXME rename model_cfg to diff from model_name?
     tokenizer: TokenizerCfg = field(default_factory=TokenizerCfg)
 
     def __post_init__(self):
@@ -80,9 +71,7 @@ class TaskCrullerFinetuneDOCVQACfg(TaskTrainCfg):
         if self.model_name:
             model = get_model_config(self.model_name)
             if model is None:
-                _logger.warning(
-                    f"Model config for {self.model_name} was not found, using defaults."
-                )
+                _logger.warning(f"Model config for {self.model_name} was not found, using defaults.")
             else:
                 self.model = model
         else:
@@ -106,9 +95,7 @@ class TaskCrullerFinetuneDOCVQA(TaskTrain):
         #  differentiate different precision modes such as amp + dtype, pure float16/bfloat16, custom mixed prec, etc
         self.amp_dtype = None
         if cfg.dtype is not None:
-            self.amp_dtype = (
-                torch.bfloat16 if cfg.dtype in ("bfloat16", "bf16") else torch.float16
-            )
+            self.amp_dtype = (torch.bfloat16 if cfg.dtype in ("bfloat16", "bf16") else torch.float16)
 
         self.task_start_token = "<s_docvqa>"
         self.prompt_end_token = "<s_answer>"  # Slice prompt right before answer content
@@ -163,17 +150,9 @@ class TaskCrullerFinetuneDOCVQA(TaskTrain):
         img_mean = self.model.image_encoder.trunk.pretrained_cfg["mean"]
         img_std = self.model.image_encoder.trunk.pretrained_cfg["std"]
 
-        self.img_mean = (
-            sum(img_mean) / len(img_mean)
-            if cfg.model.image_encoder.image_fmt == "L"
-            else img_mean
-        )
+        self.img_mean = (sum(img_mean) / len(img_mean) if cfg.model.image_encoder.image_fmt == "L" else img_mean)
 
-        self.img_std = (
-            sum(img_std) / len(img_std)
-            if cfg.model.image_encoder.image_fmt == "L"
-            else img_std
-        )
+        self.img_std = (sum(img_std) / len(img_std) if cfg.model.image_encoder.image_fmt == "L" else img_std)
 
         # preprocessors cross both the task/model & dataset domain, created within task here and passed to data loaders
 
@@ -197,10 +176,7 @@ class TaskCrullerFinetuneDOCVQA(TaskTrain):
             ]
         )
 
-    def setup(
-        self,
-        num_batches_per_interval: int,
-    ):
+    def setup(self, num_batches_per_interval: int, ):
         """
         FIXME this interface needs refinement * currently, training duration is 'interval' based, where interval is
         either full dataset epoch, or
@@ -229,9 +205,7 @@ class TaskCrullerFinetuneDOCVQA(TaskTrain):
 
         # We resize token embeddings after initializing
         if self.newly_added_num > 0:
-            self.model.text_decoder.trunk.resize_token_embeddings(
-                len(self.tokenizer)
-            )
+            self.model.text_decoder.trunk.resize_token_embeddings(len(self.tokenizer))
 
         device = self.device_env.device
         self.model.to(device)
@@ -239,11 +213,7 @@ class TaskCrullerFinetuneDOCVQA(TaskTrain):
         if self.device_env.world_size > 1:
             # NOTE: the plan is to add option for FSDP w/ HYBRID_SHARD strategy to extend model size capacity
             #  beyond DDP w/o overloading HF cluster NCCL throughput.
-            self.model = torch.nn.parallel.DistributedDataParallel(
-                self.model,
-                device_ids=[device],
-                static_graph=True,
-            )
+            self.model = torch.nn.parallel.DistributedDataParallel(self.model, device_ids=[device], static_graph=True)
             self.has_no_sync = hasattr(self.model, "no_sync")
 
         self._setup_optimization(num_batches_per_interval)
@@ -272,11 +242,7 @@ class TaskCrullerFinetuneDOCVQA(TaskTrain):
             with self.autocast():
                 output = self.model(image_input, label)
                 logits = output["logits"]
-
-                loss = self.loss(
-                    logits.view(-1, self.vocab_size),
-                    text_target.view(-1),
-                )
+                loss = self.loss(logits.view(-1, self.vocab_size), text_target.view(-1), )
             if accum_steps > 1:
                 loss /= accum_steps
             return loss
@@ -295,11 +261,8 @@ class TaskCrullerFinetuneDOCVQA(TaskTrain):
                 _loss.backward()
                 if need_update:
                     if self.cfg.opt.clip_grad_value is not None:
-                        timm.utils.dispatch_clip_grad(
-                            self.model.parameters(),
-                            value=self.cfg.opt.clip_grad_value,
-                            mode=self.cfg.opt.clip_grad_mode,
-                        )
+                        timm.utils.dispatch_clip_grad(self.model.parameters(
+                        ), value=self.cfg.opt.clip_grad_value, mode=self.cfg.opt.clip_grad_mode, )
                     self.optimizer.step_idx()
 
         if self.has_no_sync and not need_update:
@@ -333,9 +296,6 @@ class TaskCrullerFinetuneDOCVQA(TaskTrain):
     def state_dict(self):
         state_dicts = {}
         state_dicts["model"] = self.model.state_dict()
-        state_dicts[
-            "tokenizer"
-        ] = (
-            self.tokenizer.state_dict()
-        )  # FIXME not needed anymore? we preprocess everything before
+        state_dicts["tokenizer"] = (self.tokenizer.state_dict())
+        # FIXME not needed anymore? we preprocess everything before
         return state_dicts

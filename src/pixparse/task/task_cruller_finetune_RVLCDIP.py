@@ -45,44 +45,27 @@ class CollateRVLCDIP(BaseCollate):
         max_length: int,
         label_int2str: dict,
     ):
-        super().__init__(
-            tokenizer, image_preprocess, start_token, max_length=max_length
-        )
+        super().__init__(tokenizer, image_preprocess, start_token, max_length=max_length)
         self.int2str = label_int2str
 
     def __call__(self, batch):
         images = [item["image"] for item in batch]
         labels = [item["label"] for item in batch]
-        labels_tokens = [
-            self.tokenizer_fn(
-                self.start_token
-                + "<"
-                + self.int2str[label]
-                + "/>"
-                + self.tokenizer.eos_token
-            )
-            for label in labels
-        ]
-        return self.pack_inputs(
-            images,
-            labels_tokens
-        )
+        labels_tokens = [self.tokenizer_fn(self.start_token + "<" + self.int2str[label] +
+                                           "/>" + self.tokenizer.eos_token) for label in labels]
+        return self.pack_inputs(images, labels_tokens)
 
 
 @dataclass
 class TaskCrullerFinetuneRVLCDIPCfg(TaskTrainCfg):
-    model: ModelArgs = field(
-        default_factory=lambda: ModelArgs(
-            name="cruller_base",  # override model default in spec per task
-        )
-    )
+    # override model default in spec per task
+    model: ModelArgs = field(default_factory=lambda: ModelArgs(name="cruller_base",))
 
     def __post_init__(self):
         assert self.model.cfg is not None
         if self.tokenizer is None:
             # set tokenizer to text tower model name if not explicitly set
-            self.tokenizer = TokenizerCfg(
-                name=self.model.cfg.text_decoder.name)
+            self.tokenizer = TokenizerCfg(name=self.model.cfg.text_decoder.name)
 
 
 class TaskCrullerFinetuneRVLCDIP(TaskTrain):
@@ -167,9 +150,7 @@ class TaskCrullerFinetuneRVLCDIP(TaskTrain):
             "<s_pretrain>",  # task start (based on dataset/task)
         ]
         num_tokens_from_pretrain = self.tokenizer.add_special_tokens(
-            {"additional_special_tokens": sorted(
-                set(special_tokens_from_pretrain))}
-        )
+            {"additional_special_tokens": sorted(set(special_tokens_from_pretrain))})
         # need to resize embeddings from pretrained model in order to load it
         if num_tokens_from_pretrain > 0:
             self.model.text_decoder.trunk.resize_token_embeddings(
@@ -181,16 +162,8 @@ class TaskCrullerFinetuneRVLCDIP(TaskTrain):
         self.num_image_chs = 1 if cfg.model.image_encoder.image_fmt == "L" else 3
         img_mean = self.model.image_encoder.trunk.pretrained_cfg["mean"]
         img_std = self.model.image_encoder.trunk.pretrained_cfg["std"]
-        self.img_mean = (
-            sum(img_mean) / len(img_mean)
-            if cfg.model.image_encoder.image_fmt == "L"
-            else img_mean
-        )
-        self.img_std = (
-            sum(img_std) / len(img_std)
-            if cfg.model.image_encoder.image_fmt == "L"
-            else img_std
-        )
+        self.img_mean = (sum(img_mean) / len(img_mean) if cfg.model.image_encoder.image_fmt == "L" else img_mean)
+        self.img_std = (sum(img_std) / len(img_std) if cfg.model.image_encoder.image_fmt == "L" else img_std)
 
         # preprocessors cross both the task/model & dataset domain,
         # created within task here and passed to data loaders

@@ -121,9 +121,7 @@ def preprocess_ocr_anno(
     return dict(text=text_pages, target=target_pages), info
 
 
-def get_next_valid_page_index(
-    current_index: int, num_pages: int, anno: dict, retries: int = 10
-):
+def get_next_valid_page_index(current_index: int, num_pages: int, anno: dict, retries: int = 10):
     """
     Get the index of the next valid page which contains text. If it doesn't find any non empty page
     after 'retries' attempts, it raises a RuntimeError.
