@@ -7,13 +7,13 @@ from torch import nn as nn
 from pixparse.models.config import TextDecoderCfg
 
 
-def create_text_decoder(cfg: TextDecoderCfg) -> transformers.BartForCausalLM:  # FIXME for type hints
+def _hf_text_decoder(cfg: TextDecoderCfg) -> transformers.BartForCausalLM:  # FIXME for type hints
     assert cfg.name
 
     config = transformers.AutoConfig.from_pretrained(cfg.name)
     config.is_decoder = True
     config.add_cross_attention = True
-
+    transformers.BartForCausalLM
     if False:  # FIXME these were set in Donut but missed in first pass, should compare
         config.is_encoder_decoder = False
         config.scale_embedding = True
@@ -43,7 +43,7 @@ class TextDecoderHf(nn.Module):
 
     def __init__(self, cfg: TextDecoderCfg):
         super().__init__()
-        self.trunk = create_text_decoder(cfg)
+        self.trunk = _hf_text_decoder(cfg)
         self.prepare_inputs_for_generation = self.prepare_inputs_for_inference
 
     def prepare_inputs_for_inference(
@@ -78,6 +78,12 @@ class TextDecoderHf(nn.Module):
             "encoder_hidden_states": encoder_outputs #.last_hidden_state, #FIXME for timm ViT encoder there is no last hidden state
         }
         return output
+
+    @torch.jit.ignore
+    def set_grad_checkpointing(self, enable=True):
+        for n, m in self.trunk.named_modules():
+            if hasattr(m, 'gradient_checkpointing'):
+                m.gradient_checkpointing = enable
 
     def forward(
             self,

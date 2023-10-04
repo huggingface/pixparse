@@ -19,6 +19,7 @@ class OptimizationCfg:
     clip_grad_value: Optional[float] = None
     clip_grad_mode: Optional[str] = None
     grad_accum_steps: int = 1
+    grad_checkpointing: bool = False
     momentum: Optional[float] = None
     betas: Optional[Tuple[float, float]] = None
     layer_decay: Optional[float] = None
