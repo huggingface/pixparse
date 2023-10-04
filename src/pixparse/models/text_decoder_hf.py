@@ -13,7 +13,6 @@ def _hf_text_decoder(cfg: TextDecoderCfg) -> transformers.BartForCausalLM:  # FI
     config = transformers.AutoConfig.from_pretrained(cfg.name)
     config.is_decoder = True
     config.add_cross_attention = True
-    transformers.BartForCausalLM
     if False:  # FIXME these were set in Donut but missed in first pass, should compare
         config.is_encoder_decoder = False
         config.scale_embedding = True
