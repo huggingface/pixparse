@@ -354,56 +354,42 @@ class TaskCrullerFinetuneCORD(TaskTrain):
             "text_target": targets,
         }
 
-    def _forward(self, image_input, target):
-        with self.autocast():
-            if self.finetune_donut_weights:
-                output = self.model(pixel_values=image_input, decoder_input_ids=label, labels=text_target)
-                logits = output["logits"]
-            else:
-                output = self.model(image_input, label)
-                logits = output["logits"]
-
-            loss = self.loss(
-                logits.view(-1, self.vocab_size),
-                text_target.view(-1),
-            )
-
-        if accum_steps > 1:
-            loss /= accum_steps
-        return loss
-
-    def step(self, sample: Dict[str, Any]) -> Dict[str, Any]:
+    def _forward(self, sample: Dict[str, Any]):
         image_input = sample["image"]
         label = sample["label"]
         text_target = sample["text_target"]
-        result = {}
         image_input = image_input.to(self.device_env.device, non_blocking=True)
         label = label.to(self.device_env.device, non_blocking=True)
         text_target = text_target.to(self.device_env.device, non_blocking=True)
 
-        accum_steps = self.cfg.opt.grad_accum_steps
-        need_update = (self.interval_batch_idx + 1) % accum_steps == 0
+        with self.autocast():
+            output = self.model(image_input, label)
+            logits = output["logits"]
+            loss = self.loss(
+                logits.view(-1, self.vocab_size),
+                text_target.view(-1),
+            )
+        return output, loss
 
-        self.batch_idx += 1
-        self.interval_batch_idx += 1
-        if self.step % 100 == 0:
+    def after_step(self, sample, output, loss):
+        metrics_updated = False
+        if self.step_idx % self.metrics_frequency == 0:
+            # TODO add metrics and possibly eval_gallery for finetuning
+            self.train_metrics = None
+            eval_gallery = None
+            metrics_updated = True
+
+        if metrics_updated or self.step_idx % self.log_frequency == 0:
             self.monitor.log_step(
-                "finetune",
-                step_idx=self.step,
+                'train',
+                step_idx=self.step_idx,
                 step_end_idx=self.num_intervals * self.num_steps_per_interval,
                 interval=self.interval_idx,
                 loss=loss.item(),
                 lr=self.get_current_lr(),
-                metrics=None,
-                eval_data=None,
+                metrics=self.train_metrics if metrics_updated else None,
+                eval_data=eval_gallery if metrics_updated else None,
             )
-
-        if not need_update:
-            return result
-
-        self.step += 1
-        self.scheduler.step_update(self.step)
-        self.optimizer.zero_grad()
 
     def state_dict(self):
         state_dicts = {}
