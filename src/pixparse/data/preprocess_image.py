@@ -19,12 +19,6 @@ try:
 except ImportError:
     has_albumentations = False
 
-try:
-    import cv2
-    has_cv2 = True
-except ImportError:
-    has_cv2 = False
-
 
 def create_transforms(
         name,
@@ -105,7 +99,7 @@ def better_transforms(
             ),
             transforms.RandomApply([
                 Bitmap()
-                ],
+            ],
                 p=.05
             ),
             transforms.RandomApply([
@@ -261,6 +255,48 @@ def alb_wrapper(transform):
 
 
 class CropMargin:
+    def __init__(self) -> None:
+        pass
+
+    def python_find_non_zero(self, image: np.array):
+        """This is a reimplementation of a findNonZero function equivalent to cv2."""
+        non_zero_indices = np.column_stack(np.nonzero(image))
+        idxvec = non_zero_indices[:, [1, 0]]
+        idxvec = idxvec.reshape(-1, 1, 2)
+        return idxvec
+
+    def python_bounding_rect(self, coordinates):
+        """This is a reimplementation of a BoundingRect function equivalent to cv2."""
+        min_values = np.min(coordinates, axis=(0, 1)).astype(int)
+        max_values = np.max(coordinates, axis=(0, 1)).astype(int)
+        x_min, y_min = min_values[0], min_values[1]
+        width = max_values[0] - x_min + 1
+        height = max_values[1] - y_min + 1
+        return x_min, y_min, width, height
+
+    def __call__(
+        self,
+        image: np.array,
+        gray_threshold: int = 200,
+    ) -> np.array:
+        data = np.array(image.convert("L")).astype(np.uint8)
+        max_val = data.max()
+        min_val = data.min()
+        if max_val == min_val:
+            image = np.array(image)
+            return image
+        data = (data - min_val) / (max_val - min_val) * 255
+        gray = data < gray_threshold
+        coords = self.python_find_non_zero(gray)
+        x_min, y_min, width, height = self.python_bounding_rect(coords)
+        image = image.crop((x_min, y_min, x_min + width, y_min + height))
+        return image
+
+
+class CV2_CropMargin:
+    """
+    To be deprecated in favor of non-cv2 dependent equivalent.
+    """
 
     def __init__(self):
         pass
@@ -486,7 +522,6 @@ if has_albumentations:
             img = cv2.erode(img, kernel, iterations=1)
             return img
 
-
     class DilationAlb(alb.ImageOnlyTransform):
         def __init__(self, scale, always_apply=False, p=0.5):
             super().__init__(always_apply=always_apply, p=p)
@@ -504,7 +539,6 @@ if has_albumentations:
             img = cv2.dilate(img, kernel, iterations=1)
             return img
 
-
     class BitmapAlb(alb.ImageOnlyTransform):
         def __init__(self, value=0, lower=200, always_apply=False, p=0.5):
             super().__init__(always_apply=always_apply, p=p)
@@ -515,5 +549,3 @@ if has_albumentations:
             img = img.copy()
             img[img < self.lower] = self.value
             return img
-
-
