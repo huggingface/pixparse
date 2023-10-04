@@ -74,8 +74,7 @@ class TaskCrullerEvalRVLCDIP(TaskEval):
         self.state_dict = OrderedDict()
         self.resume = False
 
-        # Setup task specific tokens
-        special_tokens = [
+        self.special_tokens_finetune = [
             "<sep/>",  # JSON list separator
             self.task_start_token,  # task start (based on dataset/task)
             self.prompt_end_token,  # prompt end (or task_start for pretrain)
@@ -98,12 +97,6 @@ class TaskCrullerEvalRVLCDIP(TaskEval):
             "<scientific_report/>",
             "<specification/>",
         ]
-        newly_added_num = self.tokenizer.trunk.add_special_tokens(
-            {"additional_special_tokens": sorted(set(special_tokens))}
-        )
-
-        self.has_no_sync = False
-        self.num_image_chs = 1 if cfg.model.image_encoder.image_fmt == "L" else 3
 
         self.int2str = {
             0: "letter",
@@ -124,6 +117,7 @@ class TaskCrullerEvalRVLCDIP(TaskEval):
             15: "memo",
         }
 
+
         self.vocab_size = len(self.tokenizer.trunk)
 
         preproc_fn = preprocess_text_anno if self.text_anno_fn else preprocess_ocr_anno
@@ -133,12 +127,21 @@ class TaskCrullerEvalRVLCDIP(TaskEval):
             max_position_embeddings=self.max_position_embeddings,
             task_start_token=self.task_start_token,
             prompt_end_token=self.prompt_end_token,
-        ) # UNUSED HERE 
+        ) # UNUSED HERE
 
         self.model = Cruller(cfg.model)  # FIXME would be good to defer weight init here
 
-        # We need to resize the token embeddings after the model has been initialized
-        if newly_added_num > 0:
+
+        special_tokens_from_pretrain = [
+                "<sep/>",  # JSON list separator
+                "<s_pretrain>",  # task start (based on dataset/task)
+            ]
+
+        num_tokens_from_pretrain = self.tokenizer.trunk.add_special_tokens(
+            {"additional_special_tokens": sorted(set(special_tokens_from_pretrain))}
+        )
+        # need to resize embeddings from pretrained model in order to load it
+        if num_tokens_from_pretrain > 0:
             self.model.text_decoder.trunk.resize_token_embeddings(
                 len(self.tokenizer.trunk)
             )
@@ -177,6 +180,18 @@ class TaskCrullerEvalRVLCDIP(TaskEval):
 
     def setup(self):
         device = self.device_env.device
+
+        self.newly_added_num = self.tokenizer.trunk.add_special_tokens(
+            {"additional_special_tokens": sorted(set(self.special_tokens_finetune))}
+        )
+        self.vocab_size = len(self.tokenizer.trunk)
+
+        # We resize token embeddings after initializing
+        if self.newly_added_num > 0:
+            self.model.text_decoder.trunk.resize_token_embeddings(
+                len(self.tokenizer.trunk)
+            )
+
         self.model.load_state_dict(self.resume_state_dict)
         self.model.eval()
         self.model.to(device)
@@ -241,74 +256,38 @@ class TaskCrullerEvalRVLCDIP(TaskEval):
         return {'image': images, 'label': labels}
 
     def step(self, sample):
-        """
-        Does one step of evaluation for classification on RVLCDIP.
-        """
         metrics = {}
         metrics["classification"] = dict()
-        correct_samples = 0
-        ground_truths = [self.int2str[int(gt)] for gt in sample["label"]]
-        already_counted = [False] * len(
-            ground_truths
-        )  
-
         with torch.inference_mode():
-            tensor_images = torch.stack([im for im in sample["image"]]).to(
-                self.device_env.device
-            )
-            output = self.model.image_encoder(tensor_images)
+            image_outputs = self.model.image_encoder(sample["image"].to(self.device_env.device))
+            correct_samples = 0
+            for ground_truth, image_output in zip(sample["label"], image_outputs):
+                current_string = "<s_rvlcdip>"
+                input_ids = torch.tensor(self.tokenizer.trunk.encode(current_string, add_special_tokens=False)).unsqueeze(0).to(self.device_env.device)
+                max_steps = 5
+                for _ in range(max_steps):
+                    inputs = self.prepare_inputs_for_inference(input_ids=input_ids, encoder_outputs=image_output)
+                    decoder_outputs = self.model.text_decoder(**inputs)
 
-            current_strings = ["<s_rvlcdip>" for _ in range(tensor_images.shape[0])]
+                    probabilities = F.softmax(decoder_outputs['logits'], dim=-1)
+                    next_token_id = torch.argmax(probabilities[0, -1]).item()  # Just get the last token for the single sample
 
-            input_ids = (
-                torch.tensor(self.tokenizer.trunk.encode("<s_rvlcdip>")[1])
-                .unsqueeze(0)
-                .repeat(tensor_images.shape[0], 1)
-                .to(self.device_env.device)
-            )
-
-            max_steps = 5  # Few steps for RVL CDIP, we have to predict at most 3 tokens
-
-            for step in range(max_steps):
-                inputs = self.prepare_inputs_for_inference(
-                    input_ids=input_ids,
-                    encoder_outputs=output,
-                )
-                decoder_outputs = self.model.text_decoder(**inputs)
-                probabilities = F.softmax(decoder_outputs["logits"], dim=-1)
-                next_token_ids = torch.argmax(probabilities, dim=-1)
-
-                for idx in range(next_token_ids.shape[0]):
-                    next_token_id = next_token_ids[
-                        idx, -1
-                    ].item()
                     next_token = self.tokenizer.trunk.decode([next_token_id])
-
-                    current_strings[idx] += next_token
+                    current_string += next_token
 
                     if next_token == "</s>":
-                        generated_label = (
-                            current_strings[idx]
+                        generated_label = (current_string
                             .replace("<s_rvlcdip>", "")
                             .replace("</s>", "")
                             .replace("<s>", "")
                             .strip()
                         )
-                        ground_truth_label = "<" + ground_truths[idx] + "/>"
-                        if (
-                            generated_label == ground_truth_label
-                            and not already_counted[idx]
-                        ):
+                        ground_truth_label = "<" + self.int2str[int(ground_truth)] + "/>"
+                        if generated_label == ground_truth_label:
                             correct_samples += 1
-                            already_counted[idx] = True
+                        break
 
-                input_ids = torch.tensor(
-                    [self.tokenizer.trunk.encode(s)[1:] for s in current_strings]
-                ).to(self.device_env.device)
-
-        # TODO Add other metrics relevant for eval step
-        #
-        # metrics['classification'] = ...
+                    input_ids = torch.tensor(self.tokenizer.trunk.encode(current_string, add_special_tokens=False)).unsqueeze(0).to(self.device_env.device)
         metrics["classification"]["correct_samples"] = correct_samples
         metrics["classification"]["n_valid_samples"] = len(sample['label'])
         return metrics

@@ -17,6 +17,7 @@ from pixparse.framework import TaskTrainCfg, TaskTrain, DeviceEnv, Monitor
 from pixparse.models import Cruller, ModelCfg, get_model_config
 from pixparse.tokenizers import TokenizerHF, TokenizerCfg
 from pixparse.data import preprocess_ocr_anno, preprocess_text_anno
+from pixparse.data.transforms import create_transforms
 from timm.layers import SelectAdaptivePool2d
 
 from typing import Dict, List
@@ -182,6 +183,10 @@ class TaskCrullerFinetuneRVLCDIP(TaskTrain):
 
         # preprocessors cross both the task/model & dataset domain,
         # created within task here and passed to data loaders
+
+        self.image_preprocess_train = create_transforms(cfg.transforms, image_size=cfg.model.image_encoder.image_size, image_mean=self.img_mean, image_std=self.img_std)
+
+        """
         self.image_preprocess_train = transforms.Compose(
             [
                 transforms.ToTensor(),
@@ -196,7 +201,7 @@ class TaskCrullerFinetuneRVLCDIP(TaskTrain):
                     std=self.img_std,
                 ),
             ]
-        )
+        )"""
 
     def train_setup(
         self,

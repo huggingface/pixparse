@@ -18,7 +18,7 @@ from pixparse.models import Cruller, ModelCfg, get_model_config
 from pixparse.tokenizers import TokenizerHF, TokenizerCfg
 from pixparse.data import preprocess_ocr_anno, preprocess_text_anno
 from pixparse.utils.ocr_utils import get_ocr_metrics
-
+from pixparse.data.transforms import create_transforms
 
 
 _logger = logging.getLogger(__name__)
@@ -34,7 +34,7 @@ class TaskCrullerPretrainCfg(TaskTrainCfg):
     model: ModelCfg = field(default_factory=ModelCfg)  # FIXME rename model_cfg to diff from model_name?
     tokenizer: TokenizerCfg = field(default_factory=TokenizerCfg)
 
-  
+
     def __post_init__(self):
         # FIXME figure out how to get command line args to overlay on top pre-defined
         # config but ONLY if they are specified on cmd line?
@@ -84,7 +84,7 @@ class TaskCrullerPretrain(TaskTrain):
         self.max_position_embeddings = cfg.model.text_decoder.max_length
         self.text_anno_fn = False  # set for image-text dataset experiments
         self.tokenizer = TokenizerHF(cfg.tokenizer)
-        
+
         # Setup task specific tokens
         # NOTE: Donut appears to add tokens on the fly during dataset init, requires iterating
         # through full dataset on train start due to not being able to update once tokenizers
@@ -114,39 +114,28 @@ class TaskCrullerPretrain(TaskTrain):
         # We need to resize the token embeddings after the model has been initialized
         if newly_added_num > 0:
             self.model.text_decoder.trunk.resize_token_embeddings(len(self.tokenizer.trunk))
-        
+
         self.loss = nn.CrossEntropyLoss(ignore_index=-100)
         self.has_no_sync = False
         self.num_image_chs = 1 if cfg.model.image_encoder.image_fmt == 'L' else 3
-        
+
         # TODO refactor, used in many tasks
 
         img_mean = self.model.image_encoder.trunk.pretrained_cfg['mean']
         img_std = self.model.image_encoder.trunk.pretrained_cfg['std']
-        
+
         self.img_mean = sum(img_mean) / len(img_mean) if cfg.model.image_encoder.image_fmt == 'L' else img_mean
         self.img_std = sum(img_std) / len(img_std) if cfg.model.image_encoder.image_fmt == 'L' else img_std
 
         # preprocessors cross both the task/model & dataset domain,
         # created within task here and passed to data loaders
-        self.image_preprocess_train = transforms.Compose([
-            transforms.ToTensor(),
-            transforms.Resize(
-                cfg.model.image_encoder.image_size,
-                interpolation=transforms.InterpolationMode.BICUBIC,
-                antialias=True),
-            #transforms.CenterCrop(448),  # FIXME need better aspect preserving resize & pad
-            transforms.Normalize(
-                mean=self.img_mean,
-                std=self.img_std,
-            )
-        ])
+        self.image_preprocess_train = create_transforms(cfg.transforms, image_size=cfg.model.image_encoder.image_size, image_mean=self.img_mean, image_std=self.img_std)
         self.image_preprocess_eval = None
 
-        # TODO These metrics have to be organized as dicts of dicts. 
+        # TODO These metrics have to be organized as dicts of dicts.
         # First level is the category, second level is the tag
         # We have to make this clear
-        self.train_metrics = {} 
+        self.train_metrics = {}
         self.eval_metrics = {}
         self.max_recursion_length = 1000 #specific to Cruller for generation
 
@@ -295,7 +284,7 @@ class TaskCrullerPretrain(TaskTrain):
         self.optimizer.zero_grad()
 
         if self.step % self.eval_frequency == 0:
-            metrics, eval_gallery = self.get_train_ocr_metrics(sample) 
+            metrics, eval_gallery = self.get_train_ocr_metrics(sample)
 
             self.train_metrics |= metrics
 
@@ -311,12 +300,12 @@ class TaskCrullerPretrain(TaskTrain):
             )
 
         return result
-    
+
 
     def get_train_ocr_metrics(self, sample):
         """
         In cruller_pretrain, this task returns some utils logs useful to monitor training.
-        Typically we want to return a few samples of images 
+        Typically we want to return a few samples of images
         and their generated OCR so that we can log them onto a tensorboard gallery in
         the log_step
         """
@@ -356,17 +345,18 @@ class TaskCrullerPretrain(TaskTrain):
             image_input=image_input,
             text_input=text_target,
             device_env=self.device_env,
-            max_recursion_length=self.max_recursion_length
+            max_recursion_length=self.max_recursion_length,
+            prompt_token=self.task_start_token,
             )
         if ocr_metrics and ocr_reconstructed_sample:
             metrics['ocr_reconstruction'] = ocr_metrics
             eval_data['ocr_reconstruction_data'] = ocr_reconstructed_sample
         else:
             _logger.info("Can't generate text from current batch. Skipping metrics...")
-        
+
         # TODO Add other metrics relevant for eval step
-        # 
-        # metrics['metric_category'] = ... 
+        #
+        # metrics['metric_category'] = ...
         return metrics, eval_data
 
     def state_dict(self):

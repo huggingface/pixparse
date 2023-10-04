@@ -33,29 +33,50 @@ class CustomVQADataset(Dataset):
         self.extra_tokens = ['<s_answer>', '</s_answer>', '</s_question>', '<s_question>']
         self.root_dir = root_dir
         self.split = split
-        assert split in ["train", "test", "val"], "split is not train, test or val."
+        assert split in ["train", "test", "val", "train+val"], "split is not train, test, val or train+val."
         if split == "test" or split == "val":
             json_path = os.path.join(root_dir, split, f"{split}_v1.0.json")
-        else:
-            json_path = os.path.join(root_dir, split, f"processed_{split}_v1.0.json")
+        elif split == "train+val":
+            json_path = os.path.join(root_dir, split, f"full_trainval_data.json")
+        elif split == "train":
+            #json_path = os.path.join(root_dir, split, f"processed_{split}_v1.0.json")
+            json_path = os.path.join(root_dir, split, f"{split}_v1.0.json")
         assert os.path.isdir(self.root_dir), f"Can't find {root_dir}. Make sure you have DocVQA files locally."
         assert os.path.isfile(json_path), f"{json_path} not found. Make sure you have the processed dataset."
         self.img_dir = os.path.join(root_dir, split)
         
         with open(json_path, 'r') as f:
             self.data_dict = json.load(f)
-        self.all_images = list(self.data_dict.keys())
+        #self.all_images = list(self.data_dict.keys())
         self.transform = transform
+        if split in ["train", "train+val"]:
+            self.train_data = []
+            for element in self.data_dict['data']:
+                image_id = element["image"]
+                question = element["question"]
+                answer = element["answers"][0] # We take the first answer
+                qa = "<s_question>" + question + "</s_question><s_answer>" + answer + "</s_answer>"
+                self.train_data.append([image_id, qa])
+            """
+            self.train_data = []
+            for image_id, qas in self.data_dict.items():
+                for qa in qas:
+                    self.train_data.append([image_id, qa])
+            """
+        elif split == "train+val":
+            self.train_data = self.data_dict
     
     def __len__(self):
         if self.split == "test" or self.split == "val":
             return len(self.data_dict['data'])
-        return len(self.all_images)
+        elif self.split in ['train', 'train+val']:
+            return len(self.train_data)
     
     def __getitem__(self, index):
         if self.split == "test":
             entry = self.data_dict['data'][index]
-            labels = "<s_question>" + entry['question'] + "</s_question>"
+            #labels = "<s_question>" + entry['question'] + "</s_question>"
+            labels = {"question": entry['question'], "answers": ""}
             img_path = os.path.join(self.img_dir, entry['image'])
             question_id = entry['questionId']
             image_id = entry["image"]
@@ -65,13 +86,10 @@ class CustomVQADataset(Dataset):
             img_path = os.path.join(self.img_dir, entry['image'])
             question_id = entry['questionId']
             image_id = entry["image"]
-        else:
-            image_id = self.all_images[index]
-            questions_and_answers = self.data_dict[image_id]
-            labels = questions_and_answers
-
+        elif self.split in ["train", "train+val"]:
+            image_id, labels = self.train_data[index]
             img_path = os.path.join(self.img_dir, image_id)
-            question_id = -1 # Not parsed from original dataset.
+            question_id = -1 # Not parsed from original dataset.            
         image = Image.open(img_path).convert("L")
         if self.transform:
             image = self.transform(image)
