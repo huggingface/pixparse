@@ -97,7 +97,7 @@ class TaskCrullerPretrain(TaskTrain):
         # Setup image preprocessing
         self.image_input_cfg = self.model.image_encoder.traits.get('input')
         self.image_preprocess_train = create_transforms(
-            'better',
+            self.cfg.image_transforms,
             input_cfg=self.image_input_cfg,
             training=True,
             interpolation='bicubic',

@@ -21,7 +21,7 @@ from timm.scheduler import create_scheduler_v2
 from pixparse.framework import TaskTrainCfg, TaskTrain, DeviceEnv, Monitor
 from pixparse.models import Cruller, ModelCfg, get_model_config
 from pixparse.tokenizers import create_tokenizer, TokenizerCfg
-from pixparse.data import preprocess_ocr_anno, preprocess_text_anno
+from pixparse.data import preprocess_ocr_anno, preprocess_text_anno, create_transforms
 from timm.layers import SelectAdaptivePool2d
 
 from typing import Dict, List
@@ -86,7 +86,7 @@ class TaskCrullerFinetuneDOCVQA(TaskTrain):
             )
 
         self.task_start_token = "<s_docvqa>"
-        self.prompt_end_token = "<s_answer>" # Slice prompt right before answer content
+        self.prompt_end_token = "<s_answer>"  # Slice prompt right before answer content
         self.max_position_embeddings = cfg.model.text_decoder.max_length
         self.text_anno_fn = True  # set for image-text dataset experiments
         self.tokenizer = create_tokenizer(cfg.tokenizer)
@@ -154,24 +154,14 @@ class TaskCrullerFinetuneDOCVQA(TaskTrain):
         # preprocessors cross both the task/model & dataset domain,
         # created within task here and passed to data loaders
 
-        image_size = cfg.model.image_encoder.image_size
-        color_transform = transforms.Grayscale()
-
-        self.image_preprocess_train = transforms.Compose(
-            [
-                transforms.ToTensor(),
-                color_transform,
-                transforms.Resize(
-                    image_size,
-                    interpolation=transforms.InterpolationMode.BICUBIC,
-                    antialias=True,
-                ),
-                # transforms.CenterCrop(448),  # FIXME need better aspect preserving resize & pad
-                transforms.Normalize(
-                    mean=self.img_mean,
-                    std=self.img_std,
-                ),
-            ]
+        self.image_input_cfg = self.model.image_encoder.traits.get('input')
+        self.image_preprocess_train = create_transforms(
+            self.cfg.image_transforms,
+            input_cfg=self.image_input_cfg,
+            training=True,
+            interpolation='bicubic',
+            crop_margin=False,  # True?
+            align_long_axis=False,
         )
 
     def setup(
@@ -211,7 +201,7 @@ class TaskCrullerFinetuneDOCVQA(TaskTrain):
             self.model.text_decoder.trunk.resize_token_embeddings(
                 len(self.tokenizer)
             )
-        
+
         device = self.device_env.device
         self.model.to(device)
 
@@ -240,7 +230,7 @@ class TaskCrullerFinetuneDOCVQA(TaskTrain):
         return target
 
     def collate_fn(self, batch):
-        tokenizer_fn = lambda x: self.tokenizer(
+        def tokenizer_fn(x): return self.tokenizer(
             x,
             add_special_tokens=False,
             return_tensors="pt",
@@ -250,14 +240,14 @@ class TaskCrullerFinetuneDOCVQA(TaskTrain):
         ).input_ids[0]
         images = [item['image'] for item in batch]
         q_and_as = [np.random.choice(item['labels']) for item in batch]
-        
+
         inputs_to_stack = []
         for text in q_and_as:
             inputs_to_stack.append(tokenizer_fn(
                 "<s_docvqa>"
                 + text
                 + self.tokenizer.eos_token
-            )) 
+            ))
         # Check max length here and truncate/pad if needed
         # You could enforce it to be under or equal to a specific length
 
@@ -266,7 +256,7 @@ class TaskCrullerFinetuneDOCVQA(TaskTrain):
 
         transform = self.image_preprocess_train
         images = torch.stack([transform(img) for img in images])
-        
+
         text_inputs = text_inputs[:, :-1]
         targets = targets[:, 1:]
 
@@ -320,5 +310,5 @@ class TaskCrullerFinetuneDOCVQA(TaskTrain):
             "tokenizer"
         ] = (
             self.tokenizer.state_dict()
-        ) # FIXME not needed anymore? we preprocess everything before
+        )  # FIXME not needed anymore? we preprocess everything before
         return state_dicts
