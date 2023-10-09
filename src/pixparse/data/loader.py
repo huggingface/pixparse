@@ -5,7 +5,7 @@ from chug import create_doc_anno_pipe, create_wds_loader
 from chug.common import LoaderBundle
 from torch.utils.data import DataLoader, DistributedSampler
 
-from pixparse.data import text_input_to_target
+import pixparse.data
 from pixparse.data.datasets_utils import CustomVQADataset, SafeDataset
 
 from .config import DataCfg
@@ -68,7 +68,7 @@ class BaseCollate:
         labels = torch.stack(labels_tokens)
         targets = torch.stack(
             [
-                text_input_to_target(
+                pixparse.data.text_input_to_target(
                     text_input=text,
                     tokenizer=self.tokenizer,
                     prompt_end_token=self.start_token,
