@@ -1,8 +1,9 @@
 import logging
+from ast import literal_eval
 from collections import OrderedDict
 from dataclasses import dataclass, field
 from functools import partial
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 import numpy as np
 import timm
@@ -10,12 +11,16 @@ import timm.utils
 import torch
 import torch.nn as nn
 import torchvision.transforms as transforms
+from timm.data.constants import IMAGENET_DEFAULT_MEAN, IMAGENET_DEFAULT_STD
+from timm.layers import SelectAdaptivePool2d
 
+from pixparse.data import preprocess_ocr_anno, preprocess_text_anno, create_transforms
 from pixparse.data.loader import BaseCollate
-from pixparse.data import preprocess_ocr_anno, preprocess_text_anno
 from pixparse.framework import DeviceEnv, Monitor, TaskTrain, TaskTrainCfg
 from pixparse.models import Cruller, ModelCfg, get_model_config
 from pixparse.tokenizers import TokenizerCfg, create_tokenizer
+from pixparse.utils.json_utils import json2token, token2json, JSONParseEvaluator  # assuming you need all three
+
 
 _logger = logging.getLogger(__name__)
 
@@ -154,24 +159,14 @@ class TaskCrullerFinetuneDOCVQA(TaskTrain):
 
         # preprocessors cross both the task/model & dataset domain, created within task here and passed to data loaders
 
-        image_size = cfg.model.image_encoder.image_size
-        color_transform = transforms.Grayscale()
-
-        self.image_preprocess_train = transforms.Compose(
-            [
-                transforms.ToTensor(),
-                color_transform,
-                transforms.Resize(
-                    image_size,
-                    interpolation=transforms.InterpolationMode.BICUBIC,
-                    antialias=True,
-                ),
-                # transforms.CenterCrop(448),  # FIXME need better aspect preserving resize & pad
-                transforms.Normalize(
-                    mean=self.img_mean,
-                    std=self.img_std,
-                ),
-            ]
+        self.image_input_cfg = self.model.image_encoder.traits.get('input')
+        self.image_preprocess_train = create_transforms(
+            self.cfg.image_transforms,
+            input_cfg=self.image_input_cfg,
+            training=True,
+            interpolation='bicubic',
+            crop_margin=False,  # True?
+            align_long_axis=False,
         )
 
     def setup(self, num_batches_per_interval: int, ):
@@ -224,72 +219,42 @@ class TaskCrullerFinetuneDOCVQA(TaskTrain):
             end_token=self.prompt_end_token
         )
 
-    def step(self, sample: Dict[str, Any]) -> Dict[str, Any]:
+    def _forward(self, sample: Dict[str, Any]):
         image_input = sample["image"]
         label = sample["label"]
         text_target = sample["text_target"]
-        result = {}
         image_input = image_input.to(self.device_env.device, non_blocking=True)
         label = label.to(self.device_env.device, non_blocking=True)
         text_target = text_target.to(self.device_env.device, non_blocking=True)
 
-        accum_steps = self.cfg.opt.grad_accum_steps
-        need_update = (self.interval_batch_idx + 1) % accum_steps == 0
+        with self.autocast():
+            output = self.model(image_input, label)
+            logits = output["logits"]
+            loss = self.loss(
+                logits.view(-1, self.vocab_size),
+                text_target.view(-1),
+            )
+        return output, loss
+    
+    def after_step(self, sample, output, loss):
+        metrics_updated = False
+        if self.step_idx % self.metrics_frequency == 0:
+            # TODO add metrics and possibly eval_gallery for finetuning
+            self.train_metrics = None
+            eval_gallery = None
+            metrics_updated = True
 
-        def _forward():
-            with self.autocast():
-                output = self.model(image_input, label)
-                logits = output["logits"]
-                loss = self.loss(logits.view(-1, self.vocab_size), text_target.view(-1), )
-            if accum_steps > 1:
-                loss /= accum_steps
-            return loss
-
-        def _backward(_loss):
-            if self.scaler is not None:
-                self.scaler(
-                    _loss,
-                    self.optimizer,
-                    clip_grad=self.cfg.opt.clip_grad_value,
-                    clip_mode=self.cfg.opt.clip_grad_mode,
-                    parameters=self.model.parameters(),
-                    need_update=need_update,
-                )
-            else:
-                _loss.backward()
-                if need_update:
-                    if self.cfg.opt.clip_grad_value is not None:
-                        timm.utils.dispatch_clip_grad(self.model.parameters(
-                        ), value=self.cfg.opt.clip_grad_value, mode=self.cfg.opt.clip_grad_mode, )
-                    self.optimizer.step_idx()
-
-        if self.has_no_sync and not need_update:
-            with self.model.no_sync():
-                loss = _forward()
-                _backward(loss)
-        else:
-            loss = _forward()
-            _backward(loss)
-        self.batch_idx += 1
-        self.interval_batch_idx += 1
-        if self.step % 100 == 0:
+        if metrics_updated or self.step_idx % self.log_frequency == 0:
             self.monitor.log_step(
-                "finetune",
-                step_idx=self.step,
+                'train',
+                step_idx=self.step_idx,
                 step_end_idx=self.num_intervals * self.num_steps_per_interval,
                 interval=self.interval_idx,
                 loss=loss.item(),
                 lr=self.get_current_lr(),
-                metrics=None,
-                eval_data=None,
+                metrics=self.train_metrics if metrics_updated else None,
+                eval_data=eval_gallery if metrics_updated else None,
             )
-
-        if not need_update:
-            return result
-
-        self.step += 1
-        self.scheduler.step_update(self.step)
-        self.optimizer.zero_grad()
 
     def state_dict(self):
         state_dicts = {}

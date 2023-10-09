@@ -1,16 +1,23 @@
 import logging
+from collections import OrderedDict
 from dataclasses import dataclass, field
 from functools import partial
-from typing import Any, Dict
+from typing import Any, Dict, List
 
+import timm
+import timm.utils
 import torch.nn as nn
 import torchvision.transforms as transforms
+from timm.layers import SelectAdaptivePool2d
+from timm.optim import create_optimizer_v2
+from timm.scheduler import create_scheduler_v2
 
-from pixparse.data import (preprocess_ocr_anno, preprocess_text_anno)
+from pixparse.data import preprocess_ocr_anno, preprocess_text_anno, create_transforms
 from pixparse.data.loader import BaseCollate
-from pixparse.framework import DeviceEnv, Monitor, TaskTrain, TaskTrainCfg
-from pixparse.models import Cruller, ModelArgs
+from pixparse.framework import DeviceEnv, Monitor, TaskTrain, TaskTrainCfg, OptimizationCfg
+from pixparse.models import Cruller, ModelArgs, ModelCfg, get_model_config
 from pixparse.tokenizers import TokenizerCfg, create_tokenizer
+
 
 _logger = logging.getLogger(__name__)
 
@@ -160,27 +167,14 @@ class TaskCrullerFinetuneRVLCDIP(TaskTrain):
 
         # TODO refactor, used in many tasks
         self.num_image_chs = 1 if cfg.model.image_encoder.image_fmt == "L" else 3
-        img_mean = self.model.image_encoder.trunk.pretrained_cfg["mean"]
-        img_std = self.model.image_encoder.trunk.pretrained_cfg["std"]
-        self.img_mean = (sum(img_mean) / len(img_mean) if cfg.model.image_encoder.image_fmt == "L" else img_mean)
-        self.img_std = (sum(img_std) / len(img_std) if cfg.model.image_encoder.image_fmt == "L" else img_std)
-
-        # preprocessors cross both the task/model & dataset domain,
-        # created within task here and passed to data loaders
-        self.image_preprocess_train = transforms.Compose(
-            [
-                transforms.ToTensor(),
-                transforms.Resize(
-                    cfg.model.image_encoder.image_size,
-                    interpolation=transforms.InterpolationMode.BICUBIC,
-                    antialias=True,
-                ),
-                # transforms.CenterCrop(448),  # FIXME need better aspect preserving resize & pad
-                transforms.Normalize(
-                    mean=self.img_mean,
-                    std=self.img_std,
-                ),
-            ]
+        self.image_input_cfg = self.model.image_encoder.traits.get('input')
+        self.image_preprocess_train = create_transforms(
+            self.cfg.image_transforms,
+            input_cfg=self.image_input_cfg,
+            training=True,
+            interpolation='bicubic',
+            crop_margin=False,  # True?
+            align_long_axis=False,
         )
 
     def setup(
@@ -250,6 +244,12 @@ class TaskCrullerFinetuneRVLCDIP(TaskTrain):
 
     def after_step(self, sample, output, loss):
         if self.step_idx % self.metrics_frequency == 0:
+            # TODO add metrics and possibly eval_gallery for finetuning
+            self.train_metrics = None
+            eval_gallery = None
+            metrics_updated = True
+
+        if self.step_idx % self.metrics_frequency == 0:
             self.monitor.log_step(
                 "finetune",
                 step_idx=self.step_idx,
@@ -257,6 +257,6 @@ class TaskCrullerFinetuneRVLCDIP(TaskTrain):
                 interval=self.interval_idx,
                 loss=loss.item(),
                 lr=self.get_current_lr(),
-                metrics=None,
-                eval_data=None,
+                metrics=self.train_metrics if metrics_updated else None,
+                eval_data=eval_gallery if metrics_updated else None,
             )

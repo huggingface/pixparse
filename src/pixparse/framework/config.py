@@ -19,6 +19,7 @@ class OptimizationCfg:
     clip_grad_value: Optional[float] = None
     clip_grad_mode: Optional[str] = None
     grad_accum_steps: int = 1
+    grad_checkpointing: bool = False
     momentum: Optional[float] = None
     betas: Optional[Tuple[float, float]] = None
     layer_decay: Optional[float] = None
@@ -34,7 +35,7 @@ class TaskCfg:
 class TaskTrainCfg(TaskCfg):
     model: ModelArgs = field(default_factory=ModelArgs)
     tokenizer: Optional[TokenizerCfg] = None
-
+    image_transforms: str = "nougat"  # Can be "better", "nougat" or ""
     num_intervals: int = 100
     num_warmup_intervals: int = 5
     log_frequency: int = 100  # log every n steps

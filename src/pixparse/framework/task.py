@@ -127,6 +127,10 @@ class TaskTrain(Task):
         # weights / move to device until here.
         device = self.device_env.device
         self.model.to(device)
+
+        if self.cfg.opt.grad_checkpointing:
+            self.model.set_grad_checkpointing()
+
         if self.device_env.world_size > 1:
             # NOTE: the plan is to add option for FSDP w/ HYBRID_SHARD strategy to extend
             # model size capacity beyond DDP w/o overloading HF cluster NCCL throughput.
@@ -178,6 +182,7 @@ class TaskTrain(Task):
 
     def interval_start(self):
         # epoch / interval start hook, useful?
+        self.model.train()
         self.optimizer.zero_grad()
         self.interval_batch_idx = 0
 

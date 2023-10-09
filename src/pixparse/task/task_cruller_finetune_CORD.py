@@ -1,23 +1,31 @@
 import logging
-from ast import literal_eval
-from collections import OrderedDict
-from dataclasses import dataclass, field
-from functools import partial
-from typing import Any, Dict
-
 import torch
 import torch.nn as nn
 import torchvision.transforms as transforms
-from timm.data.constants import IMAGENET_DEFAULT_MEAN, IMAGENET_DEFAULT_STD
-from torchvision.transforms import Lambda
-from transformers import VisionEncoderDecoderModel
+import timm
+import timm.utils
+from ast import literal_eval
+from collections import OrderedDict
+from contextlib import nullcontext
+from dataclasses import dataclass, field, asdict
+from functools import partial
+from typing import Any, Dict, List, Optional
+from torchvision.transforms import Lambda, functional as transformsF
+from transformers import DonutProcessor, VisionEncoderDecoderModel
 
-from pixparse.data import preprocess_ocr_anno, preprocess_text_anno
+from timm.data.constants import IMAGENET_DEFAULT_MEAN, IMAGENET_DEFAULT_STD
+from timm.layers import SelectAdaptivePool2d
+from timm.optim import create_optimizer_v2
+from timm.scheduler import create_scheduler_v2
+
+from pixparse.data import create_transforms, preprocess_ocr_anno, preprocess_text_anno
 from pixparse.data.loader import BaseCollate
 from pixparse.framework import DeviceEnv, Monitor, TaskTrain, TaskTrainCfg
-from pixparse.models import ModelArgs, create_model
-from pixparse.tokenizers import TokenizerCfg, create_tokenizer
-from pixparse.utils.json_utils import json2token
+from pixparse.models import Cruller, ModelCfg, get_model_config, ModelArgs, create_model
+from pixparse.tokenizers import create_tokenizer, TokenizerCfg
+
+from pixparse.utils.json_utils import json2token, token2json, JSONParseEvaluator
+
 
 _logger = logging.getLogger(__name__)
 
@@ -235,42 +243,17 @@ class TaskCrullerFinetuneCORD(TaskTrain):
         else:
             self.num_image_chs = 1 if cfg.model.image_encoder.image_fmt == "L" else 3
 
-        # TODO refactor, used in many tasks
-        if self.finetune_donut_weights:
-            img_mean = IMAGENET_DEFAULT_MEAN
-            img_std = IMAGENET_DEFAULT_STD
-        else:
-            img_mean = self.model.image_encoder.trunk.pretrained_cfg["mean"]
-            img_std = self.model.image_encoder.trunk.pretrained_cfg["std"]
+        # preprocessors cross both the task/model & dataset domain,
+        # created within task here and passed to data loaders
 
-        self.img_mean = (sum(img_mean) / len(img_mean) if cfg.model.image_encoder.image_fmt == "L" else img_mean)
-
-        self.img_std = (sum(img_std) / len(img_std) if cfg.model.image_encoder.image_fmt == "L" else img_std)
-
-        # preprocessors cross both the task/model & dataset domain, created within task here and passed to data loaders
-
-        if self.finetune_donut_weights:
-            image_size = (1280, 960)
-            color_transform = Lambda(lambda x: x)
-        else:
-            image_size = cfg.model.image_encoder.image_size
-            color_transform = transforms.Grayscale()
-
-        self.image_preprocess_train = transforms.Compose(
-            [
-                transforms.ToTensor(),
-                color_transform,
-                transforms.Resize(
-                    image_size,
-                    interpolation=transforms.InterpolationMode.BICUBIC,
-                    antialias=True,
-                ),
-                # transforms.CenterCrop(448),  # FIXME need better aspect preserving resize & pad
-                transforms.Normalize(
-                    mean=self.img_mean,
-                    std=self.img_std,
-                ),
-            ]
+        self.image_input_cfg = self.model.image_encoder.traits.get('input')
+        self.image_preprocess_train = create_transforms(
+            self.cfg.image_transforms,
+            input_cfg=self.image_input_cfg,
+            training=True,
+            interpolation='bicubic',
+            crop_margin=False,  # True?
+            align_long_axis=False,
         )
 
     def setup(self, num_batches_per_interval: int, ):
@@ -362,41 +345,29 @@ class TaskCrullerFinetuneCORD(TaskTrain):
             loss /= self.cfg.opt.grad_accum_steps
         return loss
 
-    def step(self, sample: Dict[str, Any]) -> Dict[str, Any]:
-        image_input = sample["image"]
-        label = sample["label"]
-        text_target = sample["text_target"]
-        result = {}
-        image_input = image_input.to(self.device_env.device, non_blocking=True)
-        label = label.to(self.device_env.device, non_blocking=True)
-        text_target = text_target.to(self.device_env.device, non_blocking=True)
+    def after_step(self, sample, output, loss):
+        metrics_updated = False
+        if self.step_idx % self.metrics_frequency == 0:
+            # TODO add metrics and possibly eval_gallery for finetuning
+            self.train_metrics = None
+            eval_gallery = None
+            metrics_updated = True
 
-        need_update = (self.interval_batch_idx + 1) % self.cfg.opt.grad_accum_steps == 0
-
-        self.batch_idx += 1
-        self.interval_batch_idx += 1
-        if self.step % 100 == 0:
+        if metrics_updated or self.step_idx % self.log_frequency == 0:
             self.monitor.log_step(
-                "finetune",
-                step_idx=self.step,
+                'train',
+                step_idx=self.step_idx,
                 step_end_idx=self.num_intervals * self.num_steps_per_interval,
                 interval=self.interval_idx,
                 loss=loss.item(),
                 lr=self.get_current_lr(),
-                metrics=None,
-                eval_data=None,
+                metrics=self.train_metrics if metrics_updated else None,
+                eval_data=eval_gallery if metrics_updated else None,
             )
-
-        if not need_update:
-            return result
-
-        self.step += 1
-        self.scheduler.step_update(self.step)
-        self.optimizer.zero_grad()
 
     def state_dict(self):
         state_dicts = {}
         state_dicts["model"] = self.model.state_dict()
-        state_dicts["tokenizer"] = (self.tokenizer.state_dict())
+        state_dicts["tokenizer"] = self.tokenizer.state_dict()
         # FIXME not needed anymore? we preprocess everything before
         return state_dicts
