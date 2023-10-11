@@ -17,13 +17,13 @@ def text_input_to_target(text_input, tokenizer, prompt_end_token, ignore_id=-100
 
 
 def preprocess_text_anno(
-    anno,
-    tokenizer: Callable,
-    max_position_embeddings: int,
-    task_start_token: str,
-    prompt_end_token: str,
-    ignore_id: int = -100,
-    generator=None,
+        anno,
+        tokenizer: Callable,
+        max_position_embeddings: int,
+        task_start_token: str,
+        prompt_end_token: str,
+        ignore_id: int = -100,
+        generator=None,
 ):
     """
     Simpler data preprocessing for raw-text data.
@@ -52,13 +52,13 @@ def preprocess_text_anno(
 
 
 def preprocess_ocr_anno(
-    anno,
-    tokenizer: Callable,
-    max_position_embeddings: int,
-    task_start_token: str,
-    prompt_end_token: str,
-    ignore_id: int = -100,
-    generator=None,
+        anno,
+        tokenizer: Callable,
+        max_position_embeddings: int,
+        task_start_token: str,
+        prompt_end_token: str,
+        ignore_id: int = -100,
+        generator=None,
 ):
     # FIXME complete and update this fn to match our OCR annotation format
     if isinstance(anno, list):
@@ -90,9 +90,7 @@ def preprocess_ocr_anno(
     page_indices = []
     text_pages = []
     target_pages = []
-    n_wanted_pages = min(
-        1, num_pages
-    )  # TODO increase that number for multipage processing
+    n_wanted_pages = min(1, num_pages)  # TODO increase that number for multipage processing
     while len(text_pages) < n_wanted_pages:
         # FIXME treating pages separately, this best approach or tokenize w/ page-break?
         anno_page = anno["pages"][current_index]
@@ -136,9 +134,8 @@ def get_next_valid_page_index(current_index: int, num_pages: int, anno: dict, re
     int: The index of the next non empty page.
     """
     for _ in range(retries):
-        current_index = (
-            current_index + 1
-        ) % num_pages  # Get the next index, wrap around to 0 if it exceeds num_pages (in case of random init)
+        # Get the next index, wrap around to 0 if it exceeds num_pages (in case of random init)
+        current_index = (current_index + 1) % num_pages
         anno_page = anno["pages"][current_index]
         if anno_page["text"]:
             return current_index
