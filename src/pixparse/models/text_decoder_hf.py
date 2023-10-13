@@ -5,6 +5,7 @@ import transformers
 from torch import nn as nn
 
 from pixparse.models.config import TextDecoderCfg
+from pixparse.layers import convert_bart_pp
 
 
 def _hf_text_decoder(cfg: TextDecoderCfg) -> transformers.BartForCausalLM:  # FIXME for type hints
@@ -32,6 +33,10 @@ def _hf_text_decoder(cfg: TextDecoderCfg) -> transformers.BartForCausalLM:  # FI
         model = transformers.AutoModelForCausalLM.from_config(
             config,
         )
+
+    # FIXME enable via config
+    # model = convert_bart_pp(model, config=model.config, qk_norm_cross=True)
+
     # TODO Following is the donut hack. Unused without generate().
     # model.model.decoder.embed_tokens.padding_idx = cfg.pad_token_id
 
