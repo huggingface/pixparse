@@ -31,6 +31,7 @@ class TextDecoderCfg(Serializable):
     pretrained: bool = True
     num_decoder_layers: Optional[int] = 4
     max_length: Optional[int] = 1024
+    qk_norm_cross: bool = False
     pad_token_id: Optional[int] = None  # FIXME move this to TokenizerCfg?
 
 
