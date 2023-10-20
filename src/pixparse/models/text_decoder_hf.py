@@ -5,33 +5,39 @@ import transformers
 from torch import nn as nn
 
 from pixparse.models.config import TextDecoderCfg
+from pixparse.layers import convert_bart_pp
 
 
 def _hf_text_decoder(cfg: TextDecoderCfg) -> transformers.BartForCausalLM:  # FIXME for type hints
     assert cfg.name
 
-    config = transformers.AutoConfig.from_pretrained(cfg.name)
-    config.is_decoder = True
-    config.add_cross_attention = True
+    # FIXME support models outside of Bart
+
+    hf_config = transformers.AutoConfig.from_pretrained(cfg.name)
+    hf_config.is_decoder = True
+    hf_config.add_cross_attention = True
     if False:  # FIXME these were set in Donut but missed in first pass, should compare
-        config.is_encoder_decoder = False
-        config.scale_embedding = True
-        config.add_final_layer_norm = True
+        hf_config.is_encoder_decoder = False
+        hf_config.scale_embedding = True
+        hf_config.add_final_layer_norm = True
     if cfg.num_decoder_layers is not None:
-        config.decoder_layers = cfg.num_decoder_layers
+        hf_config.decoder_layers = cfg.num_decoder_layers
     if cfg.max_length is not None:
-        config.max_position_embeddings = cfg.max_length
+        hf_config.max_position_embeddings = cfg.max_length
     #config.vocab_size =   # FIXME set vocab size here or rely on model resize when tokens added?
 
     if cfg.pretrained:
         model = transformers.AutoModelForCausalLM.from_pretrained(
             cfg.name,
-            config=config,
+            config=hf_config,
         )
     else:
         model = transformers.AutoModelForCausalLM.from_config(
-            config,
+            hf_config,
         )
+
+    model = convert_bart_pp(model, config=model.config, qk_norm_cross=cfg.qk_norm_cross)
+
     # TODO Following is the donut hack. Unused without generate().
     # model.model.decoder.embed_tokens.padding_idx = cfg.pad_token_id
 
