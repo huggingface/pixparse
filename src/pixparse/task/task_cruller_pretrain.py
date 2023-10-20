@@ -1,12 +1,10 @@
 import logging
 from contextlib import nullcontext
-from dataclasses import dataclass, field, asdict
+from dataclasses import dataclass, field
 from functools import partial
-from typing import Optional, List, Any
-
+from typing import Optional
 import torch
 import torch.nn as nn
-import torchvision.transforms as transforms
 
 import timm
 import timm.utils
@@ -30,10 +28,11 @@ _logger = logging.getLogger(__name__)
 
 @dataclass
 class TaskCrullerPretrainCfg(TaskTrainCfg):
-    model_name: Optional[str] = None  # if model_name set, loads a pre-defined config in models/configs
-    model: ModelCfg = field(default_factory=ModelCfg)  # FIXME rename model_cfg to diff from model_name?
+    # if model_name set, loads a pre-defined config in models/configs
+    model_name: Optional[str] = None
+    # FIXME rename model_cfg to diff from model_name?
+    model: ModelCfg = field(default_factory=ModelCfg)
     tokenizer: TokenizerCfg = field(default_factory=TokenizerCfg)
-
 
     def __post_init__(self):
         # FIXME figure out how to get command line args to overlay on top pre-defined
@@ -41,11 +40,13 @@ class TaskCrullerPretrainCfg(TaskTrainCfg):
         if self.model_name:
             model = get_model_config(self.model_name)
             if model is None:
-                _logger.warning(f'Model config for {self.model_name} was not found, using defaults.')
+                _logger.warning(
+                    f'Model config for {self.model_name} was not found, using defaults.')
             else:
                 self.model = model
         else:
             self.model_name = 'custom'
+
 
 class TaskCrullerPretrain(TaskTrain):
     """ Cruller Pretraining Task
@@ -60,6 +61,7 @@ class TaskCrullerPretrain(TaskTrain):
         * Call train_setup() to pass this info back to Task and finish setting up optimizer / scheduler
         * Proceed to train by interval_start()/train_step() * N/interval_end(), eval_step(), etc
     """
+
     def __init__(
             self,
             cfg: TaskCrullerPretrainCfg,
@@ -77,18 +79,20 @@ class TaskCrullerPretrain(TaskTrain):
         #  amp + dtype, pure float16/bfloat16, custom mixed prec, etc
         self.amp_dtype = None
         if cfg.dtype is not None:
-            self.amp_dtype = torch.bfloat16 if cfg.dtype in ('bfloat16', 'bf16') else torch.float16
+            self.amp_dtype = torch.bfloat16 if cfg.dtype in (
+                'bfloat16', 'bf16') else torch.float16
 
         self.task_start_token = '<s_pretrain>'
         self.prompt_end_token = self.task_start_token
         self.max_position_embeddings = cfg.model.text_decoder.max_length
         self.text_anno_fn = False  # set for image-text dataset experiments
         self.tokenizer = TokenizerHF(cfg.tokenizer)
+        self.resume = False
 
         # Setup task specific tokens
-        # NOTE: Donut appears to add tokens on the fly during dataset init, requires iterating
-        # through full dataset on train start due to not being able to update once tokenizers
-        # passed through to dataloader processes, we should store this all in configs up front
+        # NOTE: Donut appears to add tokens on the fly during dataset init, requires iterating through full dataset
+        # on train start due to not being able to update once tokenizers passed through to dataloader processes,
+        #  we should store this all in configs up front
         special_tokens = [
             "<sep/>",  # JSON list separator
             self.task_start_token,  # task start (based on dataset/task)
@@ -109,11 +113,13 @@ class TaskCrullerPretrain(TaskTrain):
             prompt_end_token=self.prompt_end_token,
         )
 
-        self.model = Cruller(cfg.model)  # FIXME would be good to defer weight init here
+        # FIXME would be good to defer weight init here
+        self.model = Cruller(cfg.model)
 
         # We need to resize the token embeddings after the model has been initialized
         if newly_added_num > 0:
-            self.model.text_decoder.trunk.resize_token_embeddings(len(self.tokenizer.trunk))
+            self.model.text_decoder.trunk.resize_token_embeddings(
+                len(self.tokenizer.trunk))
 
         self.loss = nn.CrossEntropyLoss(ignore_index=-100)
         self.has_no_sync = False
@@ -124,12 +130,15 @@ class TaskCrullerPretrain(TaskTrain):
         img_mean = self.model.image_encoder.trunk.pretrained_cfg['mean']
         img_std = self.model.image_encoder.trunk.pretrained_cfg['std']
 
-        self.img_mean = sum(img_mean) / len(img_mean) if cfg.model.image_encoder.image_fmt == 'L' else img_mean
-        self.img_std = sum(img_std) / len(img_std) if cfg.model.image_encoder.image_fmt == 'L' else img_std
+        self.img_mean = sum(
+            img_mean) / len(img_mean) if cfg.model.image_encoder.image_fmt == 'L' else img_mean
+        self.img_std = sum(
+            img_std) / len(img_std) if cfg.model.image_encoder.image_fmt == 'L' else img_std
 
         # preprocessors cross both the task/model & dataset domain,
         # created within task here and passed to data loaders
-        self.image_preprocess_train = create_transforms(cfg.transforms, image_size=cfg.model.image_encoder.image_size, image_mean=self.img_mean, image_std=self.img_std)
+        self.image_preprocess_train = create_transforms(
+            cfg.transforms, image_size=cfg.model.image_encoder.image_size, image_mean=self.img_mean, image_std=self.img_std)
         self.image_preprocess_eval = None
 
         # TODO These metrics have to be organized as dicts of dicts.
@@ -137,9 +146,7 @@ class TaskCrullerPretrain(TaskTrain):
         # We have to make this clear
         self.train_metrics = {}
         self.eval_metrics = {}
-        self.max_recursion_length = 1000 #specific to Cruller for generation
-
-
+        self.max_recursion_length = 1000  # specific to Cruller for generation
 
     def train_setup(
             self,
@@ -167,6 +174,13 @@ class TaskCrullerPretrain(TaskTrain):
         device = self.device_env.device
         self.model.to(device)
 
+        if self.resume:
+            _logger.info(f"Resuming from existing checkpoint. ")
+            self.state_dict = {
+                k.replace("module.", ""): v for k, v in self.state_dict.items()}
+            self.optimizer.load_state_dict(self.optimizer_state_dict)
+            self.model.load_state_dict(self.state_dict)
+
         if self.device_env.world_size > 1:
             # NOTE: the plan is to add option for FSDP w/ HYBRID_SHARD strategy to extend
             # model size capacity beyond DDP w/o overloading HF cluster NCCL throughput.
@@ -193,7 +207,8 @@ class TaskCrullerPretrain(TaskTrain):
 
         if self.cfg.amp:
             self.scaler = timm.utils.NativeScaler()
-            self.autocast = partial(torch.autocast, device_type=device.type, dtype=self.amp_dtype)
+            self.autocast = partial(
+                torch.autocast, device_type=device.type, dtype=self.amp_dtype)
         else:
             self.scaler = None
             self.autocast = nullcontext
@@ -227,8 +242,10 @@ class TaskCrullerPretrain(TaskTrain):
         result = {}
 
         image_input = image_input.to(self.device_env.device, non_blocking=True)
-        text_input = text_input[:, :-1].to(self.device_env.device, non_blocking=True)
-        text_target = text_target[:, 1:].to(self.device_env.device, non_blocking=True)
+        text_input = text_input[:, :-
+                                1].to(self.device_env.device, non_blocking=True)
+        text_target = text_target[:, 1:].to(
+            self.device_env.device, non_blocking=True)
 
         accum_steps = self.cfg.opt.grad_accum_steps
         need_update = (self.interval_batch_idx + 1) % accum_steps == 0
@@ -301,7 +318,6 @@ class TaskCrullerPretrain(TaskTrain):
 
         return result
 
-
     def get_train_ocr_metrics(self, sample):
         """
         In cruller_pretrain, this task returns some utils logs useful to monitor training.
@@ -314,8 +330,10 @@ class TaskCrullerPretrain(TaskTrain):
         image_input, text_input, text_target = sample
 
         image_input = image_input.to(self.device_env.device, non_blocking=True)
-        text_input = text_input[:, :-1].to(self.device_env.device, non_blocking=True)
-        text_target = text_target[:, 1:].to(self.device_env.device, non_blocking=True)
+        text_input = text_input[:, :-
+                                1].to(self.device_env.device, non_blocking=True)
+        text_target = text_target[:, 1:].to(
+            self.device_env.device, non_blocking=True)
 
         """
         metrics = {}
@@ -347,12 +365,13 @@ class TaskCrullerPretrain(TaskTrain):
             device_env=self.device_env,
             max_recursion_length=self.max_recursion_length,
             prompt_token=self.task_start_token,
-            )
+        )
         if ocr_metrics and ocr_reconstructed_sample:
             metrics['ocr_reconstruction'] = ocr_metrics
             eval_data['ocr_reconstruction_data'] = ocr_reconstructed_sample
         else:
-            _logger.info("Can't generate text from current batch. Skipping metrics...")
+            _logger.info(
+                "Can't generate text from current batch. Skipping metrics...")
 
         # TODO Add other metrics relevant for eval step
         #

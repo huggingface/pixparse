@@ -28,13 +28,15 @@ _logger = logging.getLogger('train')
 
 @dataclass
 class TrainCfg:
-    experiment: Optional[str] = None  # experiment name, auto-generated if None or required?
+    # experiment name, auto-generated if None or required?
+    experiment: Optional[str] = None
     output_dir: str = './output'
     log_filename: str = 'out.log'
     s3_bucket: str = ""
     resume: bool = False
     checkpoint_path: str = ""
-    output_checkpoint_dir: Optional[str] = None  # default output_dir/checkpoints
+    # default output_dir/checkpoints
+    output_checkpoint_dir: Optional[str] = None
     seed: int = 42
 
     # TODO
@@ -63,12 +65,14 @@ def train(
             task,
             train_loader,
             interval=i,
-            output_checkpoint_dir=cfg.output_checkpoint_dir, # FIXME used to save checkpoints sub-interval, could we pass cfg?
+            # FIXME used to save checkpoints sub-interval, could we pass cfg?
+            output_checkpoint_dir=cfg.output_checkpoint_dir,
             experiment=cfg.experiment
         )
         # save checkpoint
 
-        checkpoint_dir = os.path.join(cfg.output_checkpoint_dir, cfg.experiment)
+        checkpoint_dir = os.path.join(
+            cfg.output_checkpoint_dir, cfg.experiment)
         os.makedirs(checkpoint_dir, exist_ok=True)
         if device_env.is_primary():
             """
@@ -86,10 +90,12 @@ def train(
             checkpoint = {
                 'interval': i,
                 'state_dict': task.model.state_dict(),
-                'optimizer': task.optimizer.state_dict()
+                'optimizer': task.optimizer.state_dict(),
+                'scheduler': task.scheduler.state_dict()
             }
-            if i in [2, 5, 9, 13, 19, 23, 29, 59, 79, 99, 129, 199]:
-                torch.save(checkpoint, os.path.join(checkpoint_dir, f'checkpoint-{i}.pt'))
+            if i in [0, 2, 5, 9, 13, 16, 19, 23, 26, 29, 59, 79, 99, 129, 199]:
+                torch.save(checkpoint, os.path.join(
+                    checkpoint_dir, f'checkpoint-{i}.pt'))
             # s3_mover.start_uploading()
 
 
@@ -109,7 +115,8 @@ def main():
     data_cfg: DataCfg = args.data
 
     device_env = DeviceEnv()
-    task, task_cfg = TaskFactory.create_task(task_name=train_cfg.task_name, task_args=args.task, device_env=device_env, monitor=None)
+    task, task_cfg = TaskFactory.create_task(
+        task_name=train_cfg.task_name, task_args=args.task, device_env=device_env, monitor=None)
 
     random_seed(train_cfg.seed, rank=device_env.global_rank)
     _logger.info(f"Device env is {device_env}")
@@ -127,7 +134,7 @@ def main():
             f"model_{model_name_safe}",
             f"lr_{'{:.1e}'.format(task_cfg.opt.learning_rate)}",
             f"b_{data_cfg.train.batch_size}",
-            #TODO make completion of exp name derived from essential hparams
+            # TODO make completion of exp name derived from essential hparams
         ])
         train_cfg = replace(train_cfg, experiment=experiment)
 
@@ -179,12 +186,17 @@ def main():
             state_dict = checkpoint
         else:
             state_dict = checkpoint["state_dict"]
+            optimizer_state_dict = checkpoint['optimizer']
+            resume_interval = checkpoint['interval']
         task.state_dict = state_dict
+        task.optimizer_state_dict = optimizer_state_dict
+        task.resum_interval = resume_interval
         task.resume = True
 
     # ------------------------------------------
 
-    output_checkpoint_dir = train_cfg.output_checkpoint_dir or os.path.join(experiment_path, 'checkpoints')
+    output_checkpoint_dir = train_cfg.output_checkpoint_dir or os.path.join(
+        experiment_path, 'checkpoints')
     os.makedirs(output_checkpoint_dir, exist_ok=True)
     train_cfg = replace(train_cfg, output_checkpoint_dir=output_checkpoint_dir)
     if device_env.is_primary():
@@ -192,7 +204,8 @@ def main():
         _logger.info(train_cfg)
 
     loaders = {}
-    assert (data_cfg.train is not None) or (data_cfg.eval is not None), f"Neither data_cfg.train nor data_cfg.eval are set."
+    assert (data_cfg.train is not None) or (
+        data_cfg.eval is not None), f"Neither data_cfg.train nor data_cfg.eval are set."
     if data_cfg.train is not None:
         loaders['train'] = create_loader(
             data_cfg.train,
@@ -203,7 +216,8 @@ def main():
             image_fmt=task_cfg.model.image_encoder.image_fmt,
             world_size=device_env.world_size,
             global_rank=device_env.global_rank,
-            create_decoder_pipe=create_doc_anno_pipe,  # TODO abstract away type of decoder needed
+            # TODO abstract away type of decoder needed
+            create_decoder_pipe=create_doc_anno_pipe,
         )
     task.train_setup(
         num_batches_per_interval=loaders['train'].num_batches,
