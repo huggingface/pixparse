@@ -16,6 +16,10 @@ class ImageEncoderTimm(nn.Module):
         timm_kwargs = {}
         if cfg.image_size is not None and cfg.needs_image_size:
             timm_kwargs['img_size'] = cfg.image_size
+        if cfg.patch_size is not None:
+            timm_kwargs['patch_size'] = cfg.patch_size
+        if cfg.window_size is not None:
+            timm_kwargs['window_size'] = cfg.patch_size
         if cfg.drop_path_rate is not None:
             timm_kwargs['drop_path_rate'] = cfg.drop_path_rate
         if cfg.patch_drop_rate is not None:

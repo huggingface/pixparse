@@ -3,7 +3,7 @@ import logging
 import re
 from pathlib import Path
 from dataclasses import dataclass, field, replace
-from typing import ClassVar, Optional, Tuple
+from typing import ClassVar, Optional, Union, Tuple
 
 from simple_parsing.helpers import Serializable
 
@@ -23,12 +23,14 @@ class ImageEncoderCfg(Serializable):
     pool_type: Optional[str] = None  # output pooling type
     head_type: Optional[str] = None  # output head (projection) type ('linear', 'mlp')
     out_dim: Optional[int] = None  # enforce different output dim for head (must be enabled)
-    drop_rate: Optional[float] = None
-    drop_path_rate: Optional[float] = None
-    patch_drop_rate: Optional[float] = None
+    patch_size: Optional[Union[int, Tuple[int, int]]] = None
+    window_size: Optional[Union[int, Tuple[int, int]]] = None
     image_fmt: str = 'L'
     image_size: Optional[Tuple[int, int]] = (576, 448)
     needs_image_size: bool = True  # model needs static image size on creation (vit, swin, etc)
+    drop_rate: Optional[float] = None
+    drop_path_rate: Optional[float] = None
+    patch_drop_rate: Optional[float] = None
     pretrained: bool = True
 
 
