@@ -78,6 +78,10 @@ class ImageEncoderTimm(nn.Module):
     def set_grad_checkpointing(self, enable=True):
         self.trunk.set_grad_checkpointing(enable)
 
+    @torch.jit.ignore
+    def no_weight_decay(self):
+        return {'trunk.' + n for n in self.trunk.no_weight_decay()}
+
     def forward(self, x):
         x = self.trunk(x)
         if self.pool is not None:

@@ -90,6 +90,11 @@ class TextDecoderHf(nn.Module):
             if hasattr(m, 'gradient_checkpointing'):
                 m.gradient_checkpointing = enable
 
+    @torch.jit.ignore
+    def no_weight_decay(self):
+        look_for = ('embed_positions', 'embed_tokens')
+        return {n for n, _ in self.named_parameters() if any([l in n for l in look_for])}
+
     def forward(
             self,
             input_ids,

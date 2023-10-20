@@ -154,6 +154,7 @@ class TaskTrain(Task):
             lr=self.cfg.opt.learning_rate,
             eps=self.cfg.opt.eps,
             layer_decay=self.cfg.opt.layer_decay,
+            weight_decay=self.cfg.opt.weight_decay,
             **opt_kwargs,
         )
 

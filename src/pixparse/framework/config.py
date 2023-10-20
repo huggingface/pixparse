@@ -16,8 +16,8 @@ class OptimizationCfg:
     warmup_learning_rate: float = 0.
     weight_decay: float = .02
     eps: float = 1e-6
-    clip_grad_value: Optional[float] = None
-    clip_grad_mode: Optional[str] = None
+    clip_grad_value: Optional[float] = None  # Gradient clipping value.
+    clip_grad_mode: Optional[str] = None  # Gradient clipping mode, one of ('norm', 'value', 'agc').
     grad_accum_steps: int = 1
     grad_checkpointing: bool = False
     momentum: Optional[float] = None

@@ -17,6 +17,13 @@ class Cruller(nn.Module):
         self.image_encoder.set_grad_checkpointing(enable)
         self.text_decoder.set_grad_checkpointing(enable)
 
+    @torch.jit.ignore
+    def no_weight_decay(self):
+        no_wd = set()
+        no_wd |= {'image_encoder.' + n for n in self.image_encoder.no_weight_decay()}
+        no_wd |= {'text_decoder.' + n for n in self.text_decoder.no_weight_decay()}
+        return no_wd
+
     def forward(self, image_input, text_input):
         encoder_output = self.image_encoder(image_input)
         decoder_output = self.text_decoder(
