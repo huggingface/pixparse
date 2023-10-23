@@ -120,6 +120,7 @@ def create_loader(
         image_key (str, optional): Image formats/extensions that can be recognized and processed.
             Default includes formats such as "pdf", "tif", "tiff", etc.
         image_fmt (str, optional): Image format for reading images. Default is "L" (8-bit pixels, black and white).
+        start_interval: The starting interval (epoch for full passes) for setting seed, etc. appropriately.
         seed (int, optional): Seed for random operations to ensure reproducibility. Default is 0.
         world_size (int, optional): Total number of processes in the distributed setup. Default is 1.
         global_rank (int, optional): Rank of the current process in the distributed setup. Default is 0.
@@ -144,6 +145,8 @@ def create_loader(
             cfg.source,
             decoder,
             is_train=is_train,
+            resampled=cfg.resampled,
+            start_interval=start_interval,
             num_samples=cfg.num_samples,
             workers=cfg.num_workers,
             batch_size=cfg.batch_size,
@@ -161,7 +164,8 @@ def create_loader(
             )
         else:
             dataset = load_dataset(
-                cfg.source, verification_mode=VerificationMode.ALL_CHECKS
+                cfg.source,
+                verification_mode=VerificationMode.ALL_CHECKS,
             )[cfg.split]
         dataset = SafeDataset(dataset)
 

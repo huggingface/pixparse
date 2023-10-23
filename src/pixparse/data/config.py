@@ -44,3 +44,4 @@ class DataCfg:
     split: str = ""
     format: str = "webdataset"  # e.g. "hf_dataset" or "webdataset"
     num_workers: int = 4
+    resampled: bool = False  # sample shards with replacement
