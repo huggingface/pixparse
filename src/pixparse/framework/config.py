@@ -12,7 +12,7 @@ class OptimizationCfg:
     """
     optimizer: str = 'adamw'
     scheduler: str = 'cosine'
-    learning_rate: float = 5e-4
+    learning_rate: float = 1e-4
     warmup_learning_rate: float = 0.
     weight_decay: float = .02
     eps: float = 1e-6
