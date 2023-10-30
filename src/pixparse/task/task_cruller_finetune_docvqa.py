@@ -17,7 +17,7 @@ from timm.layers import SelectAdaptivePool2d
 from pixparse.data import preprocess_ocr_anno, preprocess_text_anno, create_transforms
 from pixparse.data.loader import BaseCollate
 from pixparse.framework import DeviceEnv, Monitor, TaskTrain, TaskTrainCfg
-from pixparse.models import Cruller, ModelCfg, get_model_config
+from pixparse.models import Cruller, create_model, ModelArgs
 from pixparse.tokenizers import TokenizerCfg, create_tokenizer
 from pixparse.utils.json_utils import json2token, token2json, JSONParseEvaluator  # assuming you need all three
 
@@ -66,21 +66,15 @@ class CollateDocVQA(BaseCollate):
 
 @dataclass
 class TaskCrullerFinetuneDOCVQACfg(TaskTrainCfg):
-    model_name: Optional[str] = None  # if model_name set, loads a pre-defined config in models/configs
-    model: ModelCfg = field(default_factory=ModelCfg)  # FIXME rename model_cfg to diff from model_name?
-    tokenizer: TokenizerCfg = field(default_factory=TokenizerCfg)
+    model: ModelArgs = field(default_factory=lambda: ModelArgs(
+        name='cruller_base',  # override model default in spec per task
+    ))
 
     def __post_init__(self):
-        # FIXME figure out how to get command line args to overlay on top pre-defined config but ONLY if they are
-        # specified on cmd line?
-        if self.model_name:
-            model = get_model_config(self.model_name)
-            if model is None:
-                _logger.warning(f"Model config for {self.model_name} was not found, using defaults.")
-            else:
-                self.model = model
-        else:
-            self.model_name = "custom"
+        assert self.model.cfg is not None
+        if self.tokenizer is None:
+            # set tokenizer to text tower model name if not explicitly set
+            self.tokenizer = TokenizerCfg(name=self.model.cfg.text_decoder.name)
 
 
 class TaskCrullerFinetuneDOCVQA(TaskTrain):
@@ -96,6 +90,7 @@ class TaskCrullerFinetuneDOCVQA(TaskTrain):
             monitor=monitor,
         )
         self.cfg = cfg
+        model_cfg = self.cfg.model.cfg
         # NOTE dtype is currently being used as 'amp dtype' only, ie the low precision type, we may want to
         #  differentiate different precision modes such as amp + dtype, pure float16/bfloat16, custom mixed prec, etc
         self.amp_dtype = None
@@ -104,7 +99,7 @@ class TaskCrullerFinetuneDOCVQA(TaskTrain):
 
         self.task_start_token = "<s_docvqa>"
         self.prompt_end_token = "<s_answer>"  # Slice prompt right before answer content
-        self.max_position_embeddings = cfg.model.text_decoder.max_length
+        self.max_position_embeddings = model_cfg.text_decoder.max_length
         self.text_anno_fn = True  # set for image-text dataset experiments
         self.tokenizer = create_tokenizer(cfg.tokenizer)
 
@@ -131,8 +126,10 @@ class TaskCrullerFinetuneDOCVQA(TaskTrain):
             task_start_token=self.task_start_token,
             prompt_end_token=self.prompt_end_token,
         )
-
-        self.model = Cruller(cfg.model)  # FIXME would be good to defer weight init here
+        self.model = create_model(
+            model_cfg,
+            pretrained='',  # FIXME pass through tags or paths for full pretrained image-text tower
+        )
 
         special_tokens_from_pretrain = [
             "<sep/>",  # JSON list separator
@@ -148,15 +145,6 @@ class TaskCrullerFinetuneDOCVQA(TaskTrain):
 
         self.loss = nn.CrossEntropyLoss(ignore_index=-100)
         self.has_no_sync = False
-        self.num_image_chs = 1 if cfg.model.image_encoder.image_fmt == "L" else 3
-
-        img_mean = self.model.image_encoder.trunk.pretrained_cfg["mean"]
-        img_std = self.model.image_encoder.trunk.pretrained_cfg["std"]
-
-        self.img_mean = (sum(img_mean) / len(img_mean) if cfg.model.image_encoder.image_fmt == "L" else img_mean)
-
-        self.img_std = (sum(img_std) / len(img_std) if cfg.model.image_encoder.image_fmt == "L" else img_std)
-
         # preprocessors cross both the task/model & dataset domain, created within task here and passed to data loaders
 
         self.image_input_cfg = self.model.image_encoder.traits.get('input')
@@ -189,8 +177,16 @@ class TaskCrullerFinetuneDOCVQA(TaskTrain):
         # __init__ need the model structure to instantiate / setup tokenizer, other aspects. I don't think we need to
         # init weights / move to device until here if self.resume:
         _logger.info("Resuming from existing checkpoint.")
+        device = self.device_env.device
+        self.model.to(device)
+        checkpoint = torch.load(
+            "/fsx/pablo/training_pixparse/20231023-094042-task_cruller_pretrain-model_cruller_swin_384_to_1920-lr_3.0e-05-b_16/checkpoint-29.pt")
+        self.state_dict = checkpoint["model"]
         self.state_dict = {k.replace("module.", ""): v for k, v in self.state_dict.items()}
         self.model.load_state_dict(self.state_dict)
+
+        # FIXME derive from config "finetune checkpoint"
+
         self.newly_added_num = self.tokenizer.add_special_tokens(
             {"additional_special_tokens": sorted(set(self.special_tokens_finetune))}
         )
@@ -199,9 +195,6 @@ class TaskCrullerFinetuneDOCVQA(TaskTrain):
         # We resize token embeddings after initializing
         if self.newly_added_num > 0:
             self.model.text_decoder.trunk.resize_token_embeddings(len(self.tokenizer))
-
-        device = self.device_env.device
-        self.model.to(device)
 
         if self.device_env.world_size > 1:
             # NOTE: the plan is to add option for FSDP w/ HYBRID_SHARD strategy to extend model size capacity
@@ -216,7 +209,8 @@ class TaskCrullerFinetuneDOCVQA(TaskTrain):
             self.tokenizer,
             self.image_preprocess_train,
             self.task_start_token,
-            end_token=self.prompt_end_token
+            end_token=self.prompt_end_token,
+            max_length=512  # FIXME derive from config
         )
 
     def _forward(self, sample: Dict[str, Any]):
@@ -235,7 +229,7 @@ class TaskCrullerFinetuneDOCVQA(TaskTrain):
                 text_target.view(-1),
             )
         return output, loss
-    
+
     def after_step(self, sample, output, loss):
         metrics_updated = False
         if self.step_idx % self.metrics_frequency == 0:
@@ -262,3 +256,11 @@ class TaskCrullerFinetuneDOCVQA(TaskTrain):
         state_dicts["tokenizer"] = (self.tokenizer.state_dict())
         # FIXME not needed anymore? we preprocess everything before
         return state_dicts
+
+    def __repr__(self):
+        outputs = [
+            f'model: {repr(self.model)}',
+            f'opt: {repr(self.optimizer)}',
+            f'sched: {repr(self.scheduler)}',
+        ]
+        return '\n'.join(outputs)

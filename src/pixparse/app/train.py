@@ -132,9 +132,20 @@ def main():
         # FIXME add 'resume_latest' mode that scans experiment path for latest checkpoint
         checkpoint_path = train_cfg.resume_path
         if checkpoint_path.startswith('s3'):
-            _logger.info("s3 bucket specified. Loading checkpoint from s3.")
+            _logger.info("s3 bucket specified. Loading checkpoint from s3 for resuming.")
         checkpoint = load_checkpoint(checkpoint_path)
         task.load_state_dict(checkpoint)
+
+    # ----- Model being finetuned from checkpoint ----
+    '''
+    if train_cfg.checkpoint_path:
+        # FIXME improve naming/separation between resume and finetune
+        checkpoint_path = train_cfg.checkpoint_path
+        if checkpoint_path.startswith('s3'):
+            _logger.info("s3 bucket specified. Loading checkpoint from s3 for finetuning.")
+        checkpoint = load_checkpoint(checkpoint_path)
+        task.load_state_dict(checkpoint)
+    '''
 
     output_checkpoint_dir = train_cfg.output_checkpoint_dir or os.path.join(experiment_path, 'checkpoints')
     os.makedirs(output_checkpoint_dir, exist_ok=True)
@@ -143,7 +154,7 @@ def main():
         _logger.info(train_cfg)
 
     loaders = {}
-    assert train_cfg.train_data is not None, f"Train dataset (data_cfg.train) must be set."
+    assert train_cfg.train_data is not None, f"Train dataset (train_cfg.train_data) must be set."
     loaders['train'] = create_loader(
         train_cfg.train_data,
         is_train=True,
