@@ -177,13 +177,14 @@ class TaskCrullerFinetuneDOCVQA(TaskTrain):
         # __init__ need the model structure to instantiate / setup tokenizer, other aspects. I don't think we need to
         # init weights / move to device until here if self.resume:
         _logger.info("Resuming from existing checkpoint.")
-        device = self.device_env.device
-        self.model.to(device)
+
         checkpoint = torch.load(
             "/fsx/pablo/training_pixparse/20231023-094042-task_cruller_pretrain-model_cruller_swin_384_to_1920-lr_3.0e-05-b_16/checkpoint-29.pt")
         self.state_dict = checkpoint["model"]
         self.state_dict = {k.replace("module.", ""): v for k, v in self.state_dict.items()}
         self.model.load_state_dict(self.state_dict)
+        device = self.device_env.device
+        self.model.to(device)
 
         # FIXME derive from config "finetune checkpoint"
 
