@@ -1,4 +1,5 @@
 import abc
+import logging
 from contextlib import nullcontext
 from dataclasses import dataclass
 from functools import partial
@@ -11,9 +12,14 @@ import timm.utils
 from timm.optim import create_optimizer_v2
 from timm.scheduler import create_scheduler_v2
 
+from pixparse.utils import load_checkpoint
 from .config import TaskTrainCfg, TaskEvalCfg
 from .device import DeviceEnv
+from .fsdp import fsdp_wrap_model
 from .monitor import Monitor
+
+
+_logger = logging.getLogger(__name__)
 
 
 class Task(abc.ABC):
@@ -83,8 +89,11 @@ class TaskTrain(Task):
         #  we may want to differentiate different precision modes such as
         #  amp + dtype, pure float16/bfloat16, custom mixed prec, etc
         self.amp_dtype = None
-        if cfg.dtype is not None:
-            self.amp_dtype = torch.bfloat16 if cfg.dtype in ('bfloat16', 'bf16') else torch.float16
+        if cfg.amp:
+            if cfg.dtype is not None and cfg.dtype in ('bfloat16', 'bf16'):
+                self.amp_dtype = torch.bfloat16
+            else:
+                self.amp_dtype = torch.float16
         self.has_no_sync = False
 
         # optimization state initialized in setup()
@@ -99,6 +108,7 @@ class TaskTrain(Task):
     def setup(
             self,
             num_batches_per_interval: int,
+            resume_path: Optional[str] = None,
     ):
         """
         FIXME this interface needs refinement
@@ -110,33 +120,54 @@ class TaskTrain(Task):
             durations are specified in steps, checkpoint intervals in steps or time
 
         Args:
-            num_batches_per_interval:
-
+            num_batches_per_interval: pass info from data pipeline for LR scheduling
+            resume_path: path for train state resume checkpoint
         Returns:
 
         """
         self._setup_model()
-        self._setup_optimization(
-            num_batches_per_interval=num_batches_per_interval,
-        )
+
+        if self.cfg.dist.dist_mode == 'fsdp':
+            assert False, "FSDP support is a WIP"
+            # FSDP makes the setup more complicated than DDP, need to shard first
+            # Wrapper based changes such as .module and param name changes need to be considered.
+            # - shard (distribute) model
+            # - init optimizer
+            # - load resume
+        else:
+            self._setup_optimization(
+                num_batches_per_interval=num_batches_per_interval,
+            )
+
+            if resume_path:
+                state_dict = load_checkpoint(resume_path)
+                self.load_state_dict(state_dict)
+
+            if self.device_env.world_size > 1:
+                self._distribute_model()
 
     def _setup_model(self):
         # FIXME currently thinking moving to device, setup DDP / FSDP makes sense
-        # in setup here vs in __init__(). For __init__ need the model structure to
-        # instantiate / setup tokenizer, other aspects. I don't think we need to init
-        # weights / move to device until here.
-        device = self.device_env.device
-        self.model.to(device)
+        # in setup here vs in __init__()
+        self.model.to(self.device_env.device)
 
         if self.cfg.opt.grad_checkpointing:
             self.model.set_grad_checkpointing()
 
-        if self.device_env.world_size > 1:
-            # NOTE: the plan is to add option for FSDP w/ HYBRID_SHARD strategy to extend
-            # model size capacity beyond DDP w/o overloading HF cluster NCCL throughput.
+    def _distribute_model(self):
+        # NOTE: the plan is to add option for FSDP w/ HYBRID_SHARD strategy to extend
+        # model size capacity beyond DDP w/o overloading HF cluster NCCL throughput.
+        if self.cfg.dist.dist_mode == 'fsdp':
+            self.model = fsdp_wrap_model(
+                self.model,
+                layers=self.model.get_wrap_layers(),
+                device=self.device_env.device,
+                mixed_precision_dtype=self.amp_dtype,
+            )
+        else:
             self.model = torch.nn.parallel.DistributedDataParallel(
                 self.model,
-                device_ids=[device],
+                device_ids=[self.device_env.device],
                 static_graph=True,
             )
             self.has_no_sync = hasattr(self.model, 'no_sync')
@@ -298,16 +329,31 @@ class TaskTrain(Task):
         state_dicts['interval_idx'] = self.interval_idx
         return state_dicts
 
-    def load_state_dict(self, state_dict, start_interval=None):
-        if 'model' not in state_dict:
-            # assume state_dict contains only model if key not present
-            self.model.load_state_dict(state_dict)
+    def load_state_dict(
+            self,
+            state_dict,
+            start_interval=None,
+            restore_optimizer_state=True,
+    ):
+        def _clean(_sd):
+            return {k[7:] if k.startswith('module.') else k: v for k, v in _sd.items()}
+
+        # assume state_dict contains only model if key not present
+        state_dict_model = state_dict.get('model', state_dict)
+        if not hasattr(self.model, 'module'):
+            state_dict_model = _clean(state_dict_model)
+        self.model.load_state_dict(state_dict_model)
+
+        if 'optimizer' not in state_dict:
             return
-        self.model.load_state_dict(state_dict['model'])
-        if 'optimizer' in state_dict:
+
+        # restore optimization related state
+        if restore_optimizer_state:
             self.optimizer.load_state_dict(state_dict['optimizer'])
-        if 'scaler' in state_dict:
-            self.scaler.load_state_dict(state_dict['scaler'])
+            if 'scaler' in state_dict:
+                self.scaler.load_state_dict(state_dict['scaler'])
+
+        # restore LR schedule / step / interval related state
         if 'scheduler' in state_dict:
             self.scheduler.load_state_dict(state_dict['scheduler'])
         if 'step_idx' in state_dict:

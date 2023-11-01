@@ -24,6 +24,13 @@ class Cruller(nn.Module):
         no_wd |= {'text_decoder.' + n for n in self.text_decoder.no_weight_decay()}
         return no_wd
 
+    @torch.jit.ignore
+    def get_wrap_layers(self):
+        wrap_layers = set()
+        wrap_layers |= self.image_encoder.get_wrap_layers()
+        wrap_layers |= self.text_decoder.get_wrap_layers()
+        return wrap_layers
+
     def forward(self, image_input, text_input):
         encoder_output = self.image_encoder(image_input)
         decoder_output = self.text_decoder(

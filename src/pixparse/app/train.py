@@ -6,6 +6,7 @@ from typing import Dict, Optional, Union
 
 import simple_parsing
 from simple_parsing import ArgumentParser, subgroups
+from simple_parsing.helpers import Serializable
 
 import torch
 
@@ -22,7 +23,7 @@ _logger = logging.getLogger('train')
 
 
 @dataclass
-class TrainCfg:
+class TrainCfg(Serializable):
     train_data: DataCfg
     eval_data: Optional[DataCfg] = None
     task: TaskTrainCfg = subgroups(get_train_task_cfgs(), default='cruller_pretrain')
@@ -80,7 +81,7 @@ def main():
     random_seed(train_cfg.seed, rank=device_env.global_rank)
     _logger.info(f"Device env is {device_env}")
 
-    print(train_cfg)
+    print(train_cfg.dumps_yaml())
     task_name, task_cls = get_train_task_from_cfg(train_cfg.task)
     # get the name of the experiments
     if train_cfg.experiment is None:
@@ -127,15 +128,6 @@ def main():
         monitor=monitor,
     )
 
-    # ----- Model resuming from checkpoint -----
-    if train_cfg.resume_path:
-        # FIXME add 'resume_latest' mode that scans experiment path for latest checkpoint
-        checkpoint_path = train_cfg.resume_path
-        if checkpoint_path.startswith('s3'):
-            _logger.info("s3 bucket specified. Loading checkpoint from s3.")
-        checkpoint = load_checkpoint(checkpoint_path)
-        task.load_state_dict(checkpoint)
-
     output_checkpoint_dir = train_cfg.output_checkpoint_dir or os.path.join(experiment_path, 'checkpoints')
     os.makedirs(output_checkpoint_dir, exist_ok=True)
     train_cfg = replace(train_cfg, output_checkpoint_dir=output_checkpoint_dir)
@@ -157,6 +149,7 @@ def main():
     )
     task.setup(
         num_batches_per_interval=loaders['train'].num_batches,
+        resume_path=train_cfg.resume_path,
     )
 
     if device_env.is_primary():
