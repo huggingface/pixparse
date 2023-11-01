@@ -16,6 +16,17 @@ def text_input_to_target(text_input, tokenizer, prompt_end_token, ignore_id=-100
     return target
 
 
+def tokenize(tokenizer, text, max_position_embeddings):
+    return tokenizer(
+        text,
+        add_special_tokens=False,
+        return_tensors="pt",
+        max_length=max_position_embeddings,
+        padding="max_length",
+        truncation=True,
+    ).input_ids[0]
+
+
 def preprocess_text_anno(
         anno,
         tokenizer: Callable,
@@ -30,14 +41,7 @@ def preprocess_text_anno(
     """
     text = task_start_token + anno + tokenizer.eos_token
 
-    tokenizer_fn = lambda x: tokenizer(
-        x,
-        add_special_tokens=False,
-        return_tensors="pt",
-        max_length=max_position_embeddings,
-        padding="max_length",
-        truncation=True,
-    ).input_ids[0]
+    tokenizer_fn = tokenize(tokenizer, text, max_position_embeddings)
 
     text = tokenizer_fn(text)
 
@@ -70,14 +74,6 @@ def preprocess_ocr_anno(
     if not num_pages:
         raise RuntimeError("Empty annotation. Skipping...")
 
-    tokenizer_fn = lambda x: tokenizer(
-        x,
-        add_special_tokens=False,
-        return_tensors="pt",
-        max_length=max_position_embeddings,
-        padding="max_length",
-        truncation=True,
-    ).input_ids[0]
     pad_token_id = tokenizer.pad_token_id
     prompt_end_token_id = tokenizer.convert_tokens_to_ids(prompt_end_token)
 
@@ -101,7 +97,7 @@ def preprocess_ocr_anno(
         text = "\n".join(anno_page["text"])
         orig_text = text
         text = task_start_token + text + tokenizer.eos_token
-        text = tokenizer_fn(text)
+        text = tokenize(tokenizer, text, max_position_embeddings)
 
         target = text.clone()
         # model doesn't need to predict pad token
