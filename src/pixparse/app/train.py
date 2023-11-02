@@ -61,7 +61,7 @@ def train(
         if device_env.is_primary():
             checkpoint_dir = os.path.join(cfg.output_checkpoint_dir, cfg.experiment)
             os.makedirs(checkpoint_dir, exist_ok=True)
-            torch.save(task.state_dict(), os.path.join(checkpoint_dir, f'checkpoint-{i}.pt'))
+            torch.save(task.state_dict, os.path.join(checkpoint_dir, f'checkpoint-{i}.pt'))
 
 
 parser = ArgumentParser(
