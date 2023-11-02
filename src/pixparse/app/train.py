@@ -6,12 +6,13 @@ from typing import Dict, Optional, Union
 
 import simple_parsing
 from simple_parsing import ArgumentParser, subgroups
+from simple_parsing.helpers import Serializable
 
 import torch
 
 from pixparse.data import DataCfg, create_loader
-from pixparse.framework import DeviceEnv, Monitor, train_one_interval, evaluate, setup_logging, random_seed,\
-    TaskTrain, TaskTrainCfg
+from pixparse.framework import (DeviceEnv, Monitor, train_one_interval, evaluate, setup_logging, random_seed,
+                                TaskTrain, TaskTrainCfg)
 from pixparse.utils import clean_name, load_checkpoint
 from pixparse.task import get_train_task_from_cfg, get_train_task_cfgs
 
@@ -22,7 +23,7 @@ _logger = logging.getLogger('train')
 
 
 @dataclass
-class TrainCfg:
+class TrainCfg(Serializable):
     train_data: DataCfg
     eval_data: Optional[DataCfg] = None
     task: TaskTrainCfg = subgroups(get_train_task_cfgs(), default='cruller_pretrain')
@@ -80,7 +81,7 @@ def main():
     random_seed(train_cfg.seed, rank=device_env.global_rank)
     _logger.info(f"Device env is {device_env}")
 
-    print(train_cfg)
+    print(train_cfg.dumps_yaml())
     task_name, task_cls = get_train_task_from_cfg(train_cfg.task)
     # get the name of the experiments
     if train_cfg.experiment is None:
@@ -168,6 +169,7 @@ def main():
     )
     task.setup(
         num_batches_per_interval=loaders['train'].num_batches,
+        resume_path=train_cfg.resume_path,
     )
 
     if device_env.is_primary():

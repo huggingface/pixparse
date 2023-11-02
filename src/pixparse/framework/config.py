@@ -26,6 +26,16 @@ class OptimizationCfg:
 
 
 @dataclass
+class ParallelismCfg:
+    dist_mode: str = 'ddp'
+    sharding_strategy: str = 'hybrid'
+    sharded_state_dict: bool = False
+
+    def __post_init__(self):
+        assert self.dist_mode in ('ddp', 'fsdp')
+
+
+@dataclass
 class TaskCfg:
     dtype: Optional[str] = None
     amp: bool = True
@@ -42,6 +52,7 @@ class TaskTrainCfg(TaskCfg):
     metrics_frequency: int = 1000  # calculate train metrics every n steps
     eval_frequency: Optional[int] = None  # FIXME needs redefinition
     opt: OptimizationCfg = field(default_factory=OptimizationCfg)
+    dist: ParallelismCfg = field(default_factory=ParallelismCfg)
 
 
 @dataclass

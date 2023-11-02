@@ -86,14 +86,25 @@ class TextDecoderHf(nn.Module):
 
     @torch.jit.ignore
     def set_grad_checkpointing(self, enable=True):
-        for n, m in self.trunk.named_modules():
-            if hasattr(m, 'gradient_checkpointing'):
-                m.gradient_checkpointing = enable
+        if enable:
+            self.trunk.gradient_checkpointing_enable()
+        else:
+            self.trunk.gradient_checkpointing_disable()
 
     @torch.jit.ignore
     def no_weight_decay(self):
         look_for = ('embed_positions', 'embed_tokens')
         return {n for n, _ in self.named_parameters() if any([l in n for l in look_for])}
+
+    @torch.jit.ignore
+    def get_wrap_layers(self):
+        # FIXME make more generic
+        if isinstance(self.trunk, transformers.models.bart.BartForCausalLM):
+            from transformers.models.bart.modeling_bart import BartDecoderLayer
+            from pixparse.layers.bart import PixParseBartDecoderLayer
+            return {BartDecoderLayer, PixParseBartDecoderLayer}
+        else:
+            assert False
 
     def forward(
             self,

@@ -82,6 +82,18 @@ class ImageEncoderTimm(nn.Module):
     def no_weight_decay(self):
         return {'trunk.' + n for n in self.trunk.no_weight_decay()}
 
+    @torch.jit.ignore
+    def get_wrap_layers(self):
+        # FIXME make more generic
+        if isinstance(self.trunk, timm.models.VisionTransformer):
+            from timm.models.vision_transformer import Block
+            return {Block}
+        elif isinstance(self.trunk, timm.models.SwinTransformer):
+            from timm.models.swin_transformer import SwinTransformerBlock
+            return {SwinTransformerBlock}
+        else:
+            assert False
+
     def forward(self, x):
         x = self.trunk(x)
         if self.pool is not None:
