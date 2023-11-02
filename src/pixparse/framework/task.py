@@ -128,13 +128,21 @@ class TaskTrain(Task):
         self._setup_model()
 
         if self.cfg.dist.dist_mode == 'fsdp':
-            assert False, "FSDP support is a WIP"
             # FSDP makes the setup more complicated than DDP, need to shard first
-            # Wrapper based changes such as .module and param name changes need to be considered.
-            # - shard (distribute) model
-            # - init optimizer
-            # - load resume
+            # Wrapper based changes such as .module, _fsdp_wrapped_module. and param name
+            # changes need to be considered?
+            # TODO Checkpoint saving needs FSDP support
+            if self.device_env.world_size > 1:
+                self._distribute_model()
+
+            self._setup_optimization(
+                num_batches_per_interval=num_batches_per_interval,
+            )
+
+            # TODO support resume
+            assert not resume_path
         else:
+            # DDP or no parallelization
             self._setup_optimization(
                 num_batches_per_interval=num_batches_per_interval,
             )
@@ -162,6 +170,7 @@ class TaskTrain(Task):
                 self.model,
                 layers=self.model.get_wrap_layers(),
                 device=self.device_env.device,
+                sharding_strategy=self.cfg.dist.sharding_strategy,
                 mixed_precision_dtype=self.amp_dtype,
             )
         else:

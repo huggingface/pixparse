@@ -87,10 +87,10 @@ class ImageEncoderTimm(nn.Module):
         # FIXME make more generic
         if isinstance(self.trunk, timm.models.VisionTransformer):
             from timm.models.vision_transformer import Block
-            return Block
+            return {Block}
         elif isinstance(self.trunk, timm.models.SwinTransformer):
             from timm.models.swin_transformer import SwinTransformerBlock
-            return SwinTransformerBlock
+            return {SwinTransformerBlock}
         else:
             assert False
 
