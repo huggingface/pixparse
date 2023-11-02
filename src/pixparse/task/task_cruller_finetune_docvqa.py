@@ -173,9 +173,17 @@ class TaskCrullerFinetuneDOCVQA(TaskTrain):
         Returns:
 
         """
+        self.collator = CollateDocVQA(
+            self.tokenizer,
+            self.image_preprocess_train,
+            self.task_start_token,
+            end_token=self.prompt_end_token,
+            max_length=512  # FIXME derive from config
+        )
         # FIXME currently thinking moving to device, setup DDP / FSDP makes sense in setup here vs in __init__(). For
         # __init__ need the model structure to instantiate / setup tokenizer, other aspects. I don't think we need to
         # init weights / move to device until here if self.resume:
+
         _logger.info("Resuming from existing checkpoint.")
 
         checkpoint = torch.load(
@@ -206,13 +214,7 @@ class TaskCrullerFinetuneDOCVQA(TaskTrain):
         self._setup_optimization(num_batches_per_interval)
 
     def collate_fn(self, batch):
-        return CollateDocVQA(
-            self.tokenizer,
-            self.image_preprocess_train,
-            self.task_start_token,
-            end_token=self.prompt_end_token,
-            max_length=512  # FIXME derive from config
-        )
+        return self.collator(batch)
 
     def _forward(self, sample: Dict[str, Any]):
         image_input = sample["image"]
