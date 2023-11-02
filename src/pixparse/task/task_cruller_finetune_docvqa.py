@@ -157,7 +157,7 @@ class TaskCrullerFinetuneDOCVQA(TaskTrain):
             align_long_axis=False,
         )
 
-    def setup(self, num_batches_per_interval: int, ):
+    def setup(self, num_batches_per_interval: int, resume_path: str = None):
         """
         FIXME this interface needs refinement * currently, training duration is 'interval' based, where interval is
         either full dataset epoch, or
