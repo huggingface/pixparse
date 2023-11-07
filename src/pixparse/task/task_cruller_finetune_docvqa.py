@@ -103,7 +103,7 @@ class TaskCrullerFinetuneDOCVQA(TaskTrain):
         self.text_anno_fn = True  # set for image-text dataset experiments
         self.tokenizer = create_tokenizer(cfg.tokenizer)
 
-        self.state_dict = OrderedDict()
+        self.loaded_state_dict = OrderedDict()
         self.resume = False
 
         # Setup task specific tokens NOTE: Donut appears to add tokens on the fly during dataset init, requires
@@ -188,9 +188,9 @@ class TaskCrullerFinetuneDOCVQA(TaskTrain):
 
         checkpoint = torch.load(
             "/fsx/pablo/training_pixparse/20231023-094042-task_cruller_pretrain-model_cruller_swin_384_to_1920-lr_3.0e-05-b_16/checkpoint-29.pt")
-        self.state_dict = checkpoint["model"]
-        self.state_dict = {k.replace("module.", ""): v for k, v in self.state_dict.items()}
-        self.model.load_state_dict(self.state_dict)
+        self.loaded_state_dict = checkpoint["model"]
+        self.loaded_state_dict = {k.replace("module.", ""): v for k, v in self.loaded_state_dict.items()}
+        self.model.load_state_dict(self.loaded_state_dict)
         device = self.device_env.device
         self.model.to(device)
 
@@ -256,7 +256,7 @@ class TaskCrullerFinetuneDOCVQA(TaskTrain):
     def state_dict(self):
         state_dicts = {}
         state_dicts["model"] = self.model.state_dict()
-        state_dicts["tokenizer"] = (self.tokenizer.state_dict())
+        #state_dicts["tokenizer"] = self.tokenizer.state_dict()
         # FIXME not needed anymore? we preprocess everything before
         return state_dicts
 

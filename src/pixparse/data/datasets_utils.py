@@ -34,8 +34,8 @@ class CustomVQADataset(Dataset):
         self.extra_tokens = ['<s_answer>', '</s_answer>', '</s_question>', '<s_question>']
         self.root_dir = root_dir
         self.split = split
-        assert split in ["train", "test", "val", "train+val"], "split is not train, val, train+val or test."
-        if split == "test" or split == "val":
+        assert split in ["train", "test", "val", "train+val"], f"split is {split}, not train, val, train+val or test."
+        if split in ['test', 'val']:
             json_path = os.path.join(root_dir, split, f"{split}_v1.0.json")
         else:
             json_path = os.path.join(root_dir, split, f"processed_{split}_v1.0.json")

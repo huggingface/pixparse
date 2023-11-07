@@ -28,6 +28,7 @@ class TrainCfg(Serializable):
     eval_data: Optional[DataCfg] = None
     task: TaskTrainCfg = subgroups(get_train_task_cfgs(), default='cruller_pretrain')
 
+
     experiment: Optional[str] = None  # experiment name, auto-generated if None or required?
     output_dir: str = './output'
     log_filename: str = 'out.log'
@@ -62,7 +63,7 @@ def train(
         if device_env.is_primary():
             checkpoint_dir = os.path.join(cfg.output_checkpoint_dir, cfg.experiment)
             os.makedirs(checkpoint_dir, exist_ok=True)
-            torch.save(task.state_dict, os.path.join(checkpoint_dir, f'checkpoint-{i}.pt'))
+            torch.save(task.state_dict(), os.path.join(checkpoint_dir, f'checkpoint-{i}.pt'))
 
 
 parser = ArgumentParser(
@@ -71,7 +72,6 @@ parser = ArgumentParser(
     add_config_path_arg=True,
 )
 parser.add_arguments(TrainCfg, dest='cfg')
-
 
 def main():
     args = parser.parse_args()
