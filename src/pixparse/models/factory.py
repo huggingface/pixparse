@@ -4,6 +4,7 @@ from typing import Union
 from .config import ModelCfg, get_model_config
 from .cruller import Cruller
 
+import torch
 
 def create_model(
         model_name_or_cfg: Union[str, ModelCfg],
@@ -22,7 +23,9 @@ def create_model(
     if pretrained:
         if os.path.isfile(pretrained):
             # FIXME replace with a load fn that can adapt resolutions, input channels, heads, etc
-            model.load_state_dict(pretrained)
+            # Should also handle whether or not to load optimizer, scheduler state? or just model? - molbap
+            state_dict = torch.load(pretrained)
+            model.load_state_dict(state_dict['model'])
         else:
             assert False, 'other pretrained modes WIP'
 
