@@ -28,11 +28,11 @@ class TrainCfg(Serializable):
     eval_data: Optional[DataCfg] = None
     task: TaskTrainCfg = subgroups(get_train_task_cfgs(), default='cruller_pretrain')
 
-
     experiment: Optional[str] = None  # experiment name, auto-generated if None or required?
     output_dir: str = './output'
     log_filename: str = 'out.log'
-    resume_path: str = ""  # resume checkpoint path w/ full model + optimizer state
+    resume: bool = False # TODO test Union[bool, str] instead for flexibility
+    # resume_path: str = ""  # resume checkpoint path w/ full model + optimizer state
     checkpoint_path: str = ""
     output_checkpoint_dir: Optional[str] = None  # default output_dir/checkpoints
     seed: int = 42
@@ -66,12 +66,47 @@ def train(
             torch.save(task.state_dict(), os.path.join(checkpoint_dir, f'checkpoint-{i}.pt'))
 
 
+def load_checkpoint_cases(train_cfg, task):
+    # ----- Model resuming from checkpoint (non-fsdp) -----
+    if train_cfg.resume:
+        if not train_cfg.experiment:
+            raise ValueError(
+                f"resume set to {train_cfg.resume} and experiment directory not found at {train_cfg.experiment}.")
+        # FIXME add 'resume_latest' mode that scans experiment path for latest checkpoint
+        raise NotImplementedError("resume is not implemented yet. ")
+        """
+        checkpoint_path = train_cfg.resume_path
+        """
+        if checkpoint_path.startswith('s3'):
+            _logger.info("s3 bucket specified. Loading checkpoint from s3 for resuming.")
+        else:
+            _logger.info("Loading checkpoint from local path for resuming.")
+        checkpoint = load_checkpoint(checkpoint_path)
+        task.load_state_dict(checkpoint, restore_optimizer_state=True)
+    # ----- Model being finetuned from checkpoint (non-fsdp) ----
+    elif train_cfg.checkpoint_path:
+        # FIXME improve naming/separation between resume and finetune, assert both can't be used at the same time!
+        checkpoint_path = train_cfg.checkpoint_path
+        if checkpoint_path.startswith('s3'):
+            _logger.info("s3 bucket specified. Loading checkpoint from s3 for finetuning.")
+        else:
+            _logger.info("Loading checkpoint from local path for finetuning.")
+        checkpoint = load_checkpoint(checkpoint_path)
+        task.load_state_dict(
+            checkpoint,
+            restore_optimizer_state=False,
+            restore_scheduler_state=False,
+            restore_step_state=False
+            )
+
+
 parser = ArgumentParser(
     add_option_string_dash_variants=simple_parsing.DashVariant.DASH,
     argument_generation_mode=simple_parsing.ArgumentGenerationMode.BOTH,
     add_config_path_arg=True,
 )
 parser.add_arguments(TrainCfg, dest='cfg')
+
 
 def main():
     args = parser.parse_args()
@@ -128,25 +163,8 @@ def main():
         monitor=monitor,
     )
 
-    # ----- Model resuming from checkpoint -----
-    if train_cfg.resume_path:
-        # FIXME add 'resume_latest' mode that scans experiment path for latest checkpoint
-        checkpoint_path = train_cfg.resume_path
-        if checkpoint_path.startswith('s3'):
-            _logger.info("s3 bucket specified. Loading checkpoint from s3 for resuming.")
-        checkpoint = load_checkpoint(checkpoint_path)
-        task.load_state_dict(checkpoint)
-
-    # ----- Model being finetuned from checkpoint ----
-    '''
-    if train_cfg.checkpoint_path:
-        # FIXME improve naming/separation between resume and finetune
-        checkpoint_path = train_cfg.checkpoint_path
-        if checkpoint_path.startswith('s3'):
-            _logger.info("s3 bucket specified. Loading checkpoint from s3 for finetuning.")
-        checkpoint = load_checkpoint(checkpoint_path)
-        task.load_state_dict(checkpoint)
-    '''
+    # FIXME Move this functionality to task_cls instance init so that all weight init is in init
+    load_checkpoint_cases(train_cfg, task)
 
     output_checkpoint_dir = train_cfg.output_checkpoint_dir or os.path.join(experiment_path, 'checkpoints')
     os.makedirs(output_checkpoint_dir, exist_ok=True)
@@ -169,7 +187,7 @@ def main():
     )
     task.setup(
         num_batches_per_interval=loaders['train'].num_batches,
-        resume_path=train_cfg.resume_path,
+        resume=train_cfg.resume,
     )
 
     if device_env.is_primary():
