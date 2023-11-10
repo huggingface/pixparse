@@ -6,6 +6,7 @@ from functools import partial
 from typing import Any, Dict, Optional, Tuple, Union
 
 import torch
+import torch.nn.functional as F
 
 import timm
 import timm.utils
@@ -108,7 +109,7 @@ class TaskTrain(Task):
     def setup(
             self,
             num_batches_per_interval: int,
-            resume_path: Optional[str] = None,
+            resume: Optional[bool] = None,
     ):
         """
         FIXME this interface needs refinement
@@ -121,7 +122,7 @@ class TaskTrain(Task):
 
         Args:
             num_batches_per_interval: pass info from data pipeline for LR scheduling
-            resume_path: path for train state resume checkpoint
+            resume: # TODO should be a union of bool and str, selecting most recent checkpoint or the one wanted by user
         Returns:
 
         """
@@ -140,15 +141,16 @@ class TaskTrain(Task):
             )
 
             # TODO support resume
-            assert not resume_path
+            assert not resume
         else:
             # DDP or no parallelization
             self._setup_optimization(
                 num_batches_per_interval=num_batches_per_interval,
             )
 
-            if resume_path:
-                state_dict = load_checkpoint(resume_path)
+            if resume:
+                raise NotImplementedError("Resume is not implemented in task. Part of DDP resume exists in train.py")
+                state_dict = load_checkpoint("")
                 self.load_state_dict(state_dict)
 
             if self.device_env.world_size > 1:
@@ -343,6 +345,8 @@ class TaskTrain(Task):
             state_dict,
             start_interval=None,
             restore_optimizer_state=True,
+            restore_scheduler_state=True,
+            restore_step_state=True,
     ):
         def _clean(_sd):
             return {k[7:] if k.startswith('module.') else k: v for k, v in _sd.items()}
@@ -361,16 +365,17 @@ class TaskTrain(Task):
             self.optimizer.load_state_dict(state_dict['optimizer'])
             if 'scaler' in state_dict:
                 self.scaler.load_state_dict(state_dict['scaler'])
-
-        # restore LR schedule / step / interval related state
-        if 'scheduler' in state_dict:
-            self.scheduler.load_state_dict(state_dict['scheduler'])
-        if 'step_idx' in state_dict:
-            self.step_idx = state_dict['step_idx']
-        if 'batch_idx' in state_dict:
-            self.batch_idx = state_dict['batch_idx']
-        if start_interval is not None:
-            # override saved interval
-            self.interval_idx = start_interval
-        elif 'interval_idx' in state_dict:
-            self.interval_idx = state_dict['interval_idx']
+        if restore_scheduler_state:
+            # restore LR schedule / step / interval related state
+            if 'scheduler' in state_dict:
+                self.scheduler.load_state_dict(state_dict['scheduler'])
+        if restore_step_state:
+            if 'step_idx' in state_dict:
+                self.step_idx = state_dict['step_idx']
+            if 'batch_idx' in state_dict:
+                self.batch_idx = state_dict['batch_idx']
+            if start_interval is not None:
+                # override saved interval
+                self.interval_idx = start_interval
+            elif 'interval_idx' in state_dict:
+                self.interval_idx = state_dict['interval_idx']
