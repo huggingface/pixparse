@@ -5,7 +5,7 @@ import transformers
 from torch import nn as nn
 
 from pixparse.models.config import TextDecoderCfg
-from pixparse.layers import convert_bart_pp
+from pixparse.layers import convert_bart_pp, resize_positional_embeddings
 
 
 def _hf_text_decoder(cfg: TextDecoderCfg) -> transformers.BartForCausalLM:  # FIXME for type hints
@@ -16,7 +16,7 @@ def _hf_text_decoder(cfg: TextDecoderCfg) -> transformers.BartForCausalLM:  # FI
     hf_config = transformers.AutoConfig.from_pretrained(cfg.name)
     hf_config.is_decoder = True
     hf_config.add_cross_attention = True
-    if False:  # FIXME these were set in Donut but missed in first pass, should compare
+    if True:  # FIXME these were set in Donut but missed in first pass, should compare
         hf_config.is_encoder_decoder = False
         hf_config.scale_embedding = True
         hf_config.add_final_layer_norm = True
@@ -35,12 +35,14 @@ def _hf_text_decoder(cfg: TextDecoderCfg) -> transformers.BartForCausalLM:  # FI
         model = transformers.AutoModelForCausalLM.from_config(
             hf_config,
         )
+    model.config.is_encoder_decoder = True
 
     model = convert_bart_pp(model, config=model.config, qk_norm_cross=cfg.qk_norm_cross)
+    # TODO Protect this resize behind a flag
+    model = resize_positional_embeddings(model, max_length=cfg.max_length)
 
     # TODO Following is the donut hack. Unused without generate().
     # model.model.decoder.embed_tokens.padding_idx = cfg.pad_token_id
-
     return model
 
 
