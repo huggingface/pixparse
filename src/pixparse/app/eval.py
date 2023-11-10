@@ -71,6 +71,22 @@ parser = ArgumentParser(
 )
 parser.add_arguments(EvalCfg, dest='cfg')
 
+
+def load_checkpoint_from_source(eval_cfg, checkpoint_path):
+    if eval_cfg.s3_bucket != "":
+        _logger.info("s3 bucket specified. Loading checkpoint from s3.")
+        checkpoint = load_checkpoint_from_s3(
+            eval_cfg.s3_bucket, eval_cfg.checkpoint_path
+        )
+    else:
+        assert os.path.isfile(
+            checkpoint_path
+        ), f"Cannot find checkpoint {checkpoint_path}: File not found"
+    
+        checkpoint = torch.load(eval_cfg.checkpoint_path)
+    return checkpoint
+
+
 def main():
     args = parser.parse_args()
     eval_cfg: EvalCfg = args.cfg
@@ -103,48 +119,38 @@ def main():
 
     task = task_cls(
         eval_cfg.task,
+        eval_cfg.checkpoint_path,
         device_env=device_env,
         monitor=monitor,
     )
     # Check if current tasks is external model evaluation
 
     # FIXME defer load checkpoint to task?
-
+    """
     if eval_cfg.task_name not in ["donut_eval_ocr"]:
         checkpoint_path = eval_cfg.checkpoint_path
         eval_cfg = replace(eval_cfg, checkpoint_path=checkpoint_path)
 
         # FIXME check if path is local or s3?
-        if eval_cfg.s3_bucket != "":
-            _logger.info("s3 bucket specified. Loading checkpoint from s3.")
-            checkpoint = load_checkpoint_from_s3(
-                eval_cfg.s3_bucket, eval_cfg.checkpoint_path
-            )
-        else:
-            assert os.path.isfile(
-                checkpoint_path
-            ), f"Cannot find checkpoint {checkpoint_path}: File not found"
+        checkpoint = load_checkpoint_from_source(eval_cfg, checkpoint_path)
 
-            checkpoint = torch.load(eval_cfg.checkpoint_path)
         if isinstance(checkpoint, OrderedDict):
             state_dict = checkpoint
         elif "model" in checkpoint.keys():
             state_dict = checkpoint["model"]
         else:
             state_dict = checkpoint
-        # Create safe metrics file path
-
-        checkpoint_name = eval_cfg.checkpoint_path.replace("/", "_").replace(".pt", "")
-        metrics_file_name = f"{checkpoint_name}-{eval_cfg.dataset_name}-metrics.json"
 
         # bypass DDP module
 
         eval_state_dict = {k.replace("module.", ""): v for k, v in state_dict.items()}
-        task.resume_state_dict = eval_state_dict
+        task.load_state_dict(eval_state_dict)
     else:
         # Get a generic name for external model on chosen dataset
         metrics_file_name = f"{eval_cfg.task_name}-{eval_cfg.dataset_name}-metrics.json"
-
+    """
+    checkpoint_name = eval_cfg.checkpoint_path.replace("/", "_").replace(".pt", "")
+    metrics_file_name = f"{checkpoint_name}-{eval_cfg.dataset_name}-metrics.json"
     eval_cfg.metrics_file_path = os.path.join(eval_cfg.output_dir, metrics_file_name)
 
     if device_env.is_primary():
