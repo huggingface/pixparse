@@ -21,7 +21,6 @@ from pixparse.models import Cruller, create_model, ModelArgs
 from pixparse.tokenizers import TokenizerCfg, create_tokenizer
 from pixparse.utils.json_utils import json2token, token2json, JSONParseEvaluator  # assuming you need all three
 
-
 _logger = logging.getLogger(__name__)
 
 
@@ -66,8 +65,9 @@ class CollateDocVQA(BaseCollate):
 
 @dataclass
 class TaskCrullerFinetuneDOCVQACfg(TaskTrainCfg):
+    # TODO do we want to pass here all parameters defined before?
     model: ModelArgs = field(default_factory=lambda: ModelArgs(
-        name='cruller_base',  # override model default in spec per task
+        name='cruller_base', text_max_length=1024  # override model default in spec per task
     ))
 
     def __post_init__(self):
@@ -103,29 +103,13 @@ class TaskCrullerFinetuneDOCVQA(TaskTrain):
         self.text_anno_fn = True  # set for image-text dataset experiments
         self.tokenizer = create_tokenizer(cfg.tokenizer)
 
-        self.loaded_state_dict = OrderedDict()
         self.resume = False
 
         # Setup task specific tokens NOTE: Donut appears to add tokens on the fly during dataset init, requires
         # iterating through full dataset on train start due to not being able to update once tokenizers passed through
         # to dataloader processes, we should store this all in configs up front
-        self.special_tokens_finetune = [
-            "<sep/>",  # JSON list separator
-            self.task_start_token,  # task start (based on dataset/task)
-            self.prompt_end_token,  # prompt end (or task_start for pretrain)
-            "<s_question>",
-            "</s_question>",
-            "</s_answer>",
-        ]
-
         preproc_fn = preprocess_text_anno if self.text_anno_fn else preprocess_ocr_anno
-        self.anno_preprocess_train = partial(
-            preproc_fn,
-            tokenizer=self.tokenizer,
-            max_position_embeddings=self.max_position_embeddings,
-            task_start_token=self.task_start_token,
-            prompt_end_token=self.prompt_end_token,
-        )
+
         self.model = create_model(
             model_cfg,
             pretrained='',  # FIXME pass through tags or paths for full pretrained image-text tower
@@ -147,6 +131,14 @@ class TaskCrullerFinetuneDOCVQA(TaskTrain):
         self.has_no_sync = False
         # preprocessors cross both the task/model & dataset domain, created within task here and passed to data loaders
 
+        self.anno_preprocess_train = partial(
+            preproc_fn,
+            tokenizer=self.tokenizer,
+            max_position_embeddings=self.max_position_embeddings,
+            task_start_token=self.task_start_token,
+            prompt_end_token=self.prompt_end_token,
+        )
+
         self.image_input_cfg = self.model.image_encoder.traits.get('input')
         self.image_preprocess_train = create_transforms(
             self.cfg.image_transforms,
@@ -154,64 +146,44 @@ class TaskCrullerFinetuneDOCVQA(TaskTrain):
             training=True,
             interpolation='bicubic',
             crop_margin=False,  # True?
-            align_long_axis=False,
+            align_long_axis=True,
         )
 
-    def setup(self, num_batches_per_interval: int, resume_path: str = None):
-        """
-        FIXME this interface needs refinement * currently, training duration is 'interval' based, where interval is
-        either full dataset epoch, or
-            sampled with replacement periods, intervals correspond to checkpoint / eval periods
-        * LR schedule is updated per-step, so num_steps_per_interval is required to translate intervals ->
-            total steps for scheduling
-        * future should allow for step based durations (keeping interval as option), where train and warmup
-            durations are specified in steps, checkpoint intervals in steps or time
-
-        Args:
-            num_batches_per_interval:
-
-        Returns:
-
-        """
         self.collator = CollateDocVQA(
             self.tokenizer,
             self.image_preprocess_train,
             self.task_start_token,
             end_token=self.prompt_end_token,
-            max_length=512  # FIXME derive from config
+            max_length=128  # FIXME derive from config
         )
-        # FIXME currently thinking moving to device, setup DDP / FSDP makes sense in setup here vs in __init__(). For
-        # __init__ need the model structure to instantiate / setup tokenizer, other aspects. I don't think we need to
-        # init weights / move to device until here if self.resume:
 
-        _logger.info("Resuming from existing checkpoint.")
+    def setup(self, num_batches_per_interval: int, resume: Optional[bool] = None):
+        """
+        Overrides the setup method to add additional setup steps specific to TaskCrullerFinetuneDOCVQA.
+        The additional setup step is adding finetuning tokens.
 
-        checkpoint = torch.load(
-            "/fsx/pablo/training_pixparse/20231023-094042-task_cruller_pretrain-model_cruller_swin_384_to_1920-lr_3.0e-05-b_16/checkpoint-29.pt")
-        self.loaded_state_dict = checkpoint["model"]
-        self.loaded_state_dict = {k.replace("module.", ""): v for k, v in self.loaded_state_dict.items()}
-        self.model.load_state_dict(self.loaded_state_dict)
-        device = self.device_env.device
-        self.model.to(device)
+        Args:
+            num_batches_per_interval: Number of batches per interval.
+            resume: Flag indicating whether to resume from a checkpoint.
+        """
+        special_tokens_finetune = [
+            "<sep/>",  # JSON list separator
+            self.task_start_token,  # task start (based on dataset/task)
+            self.prompt_end_token,  # prompt end (or task_start for pretrain)
+            "<s_question>",
+            "</s_question>",
+            "</s_answer>",
+        ]
 
-        # FIXME derive from config "finetune checkpoint"
-
-        self.newly_added_num = self.tokenizer.add_special_tokens(
-            {"additional_special_tokens": sorted(set(self.special_tokens_finetune))}
+        num_tokens_from_finetune = self.tokenizer.add_special_tokens(
+            {"additional_special_tokens": sorted(set(special_tokens_finetune))}
         )
-        self.vocab_size = len(self.tokenizer)
-
-        # We resize token embeddings after initializing
-        if self.newly_added_num > 0:
+        # need to resize embeddings from pretrained model in order to load it
+        if num_tokens_from_finetune > 0:
             self.model.text_decoder.trunk.resize_token_embeddings(len(self.tokenizer))
+        self.model.text_decoder.trunk.model.decoder.embed_tokens.padding_idx = self.tokenizer.pad_token_id
 
-        if self.device_env.world_size > 1:
-            # NOTE: the plan is to add option for FSDP w/ HYBRID_SHARD strategy to extend model size capacity
-            #  beyond DDP w/o overloading HF cluster NCCL throughput.
-            self.model = torch.nn.parallel.DistributedDataParallel(self.model, device_ids=[device], static_graph=True)
-            self.has_no_sync = hasattr(self.model, "no_sync")
-
-        self._setup_optimization(num_batches_per_interval)
+        super().setup(num_batches_per_interval, resume)
 
     def collate_fn(self, batch):
         return self.collator(batch)
@@ -228,7 +200,7 @@ class TaskCrullerFinetuneDOCVQA(TaskTrain):
             output = self.model(image_input, label)
             logits = output["logits"]
             loss = self.loss(
-                logits.view(-1, self.vocab_size),
+                logits.view(-1, len(self.tokenizer)),
                 text_target.view(-1),
             )
         return output, loss
@@ -256,8 +228,6 @@ class TaskCrullerFinetuneDOCVQA(TaskTrain):
     def state_dict(self):
         state_dicts = {}
         state_dicts["model"] = self.model.state_dict()
-        #state_dicts["tokenizer"] = self.tokenizer.state_dict()
-        # FIXME not needed anymore? we preprocess everything before
         return state_dicts
 
     def __repr__(self):
