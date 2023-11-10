@@ -43,9 +43,9 @@ class TaskCrullerEvalDOCVQA(TaskEval):
     """Simple task to evaluate donut on FUNSD data and get metrics in similar format as Cruller."""
 
     def __init__(
-        # Note, this initialization schema will be common for many tasks. how do I refactor it?
         self,
         cfg: TaskCrullerEvalDOCVQACfg,
+        checkpoint_path: str,
         device_env: DeviceEnv,
         monitor: Monitor = None,
     ):
@@ -68,7 +68,6 @@ class TaskCrullerEvalDOCVQA(TaskEval):
         self.text_anno_fn = True  # set for image-text dataset experiments
         self.tokenizer = create_tokenizer(cfg.tokenizer)
 
-        self.state_dict = OrderedDict()
         self.resume = False
         docvqa_finetune_tokens = [
             "<sep/>",  # JSON list separator
@@ -93,10 +92,9 @@ class TaskCrullerEvalDOCVQA(TaskEval):
             task_start_token=self.task_start_token,
             prompt_end_token=self.prompt_end_token,
         )
-
         self.model = create_model(
             model_cfg,
-            pretrained='',  # FIXME pass through tags or paths for full pretrained image-text tower
+            pretrained='',
         )
         # ---- Add pretraining tokens
 
@@ -120,7 +118,11 @@ class TaskCrullerEvalDOCVQA(TaskEval):
             self.model.text_decoder.trunk.resize_token_embeddings(
                 len(self.tokenizer)
             )
-        # ------
+        # ------ Load checkpoint (debug)
+        state_dict = torch.load(checkpoint_path)['model']
+        eval_state_dict = {k.replace("module.", ""): v for k, v in state_dict.items()}
+        self.model.load_state_dict(eval_state_dict)
+
         self.has_no_sync = False
 
         self.image_input_cfg = self.model.image_encoder.traits.get('input')
@@ -136,9 +138,8 @@ class TaskCrullerEvalDOCVQA(TaskEval):
 
     def setup(self):
         device = self.device_env.device
-        self.model.load_state_dict(self.resume_state_dict)
-        self.model.eval()
         self.model.to(device)
+        self.model.eval()
         self.all_ground_truths = []
         self.all_predictions = []
         self.acc_list = []
@@ -180,10 +181,8 @@ class TaskCrullerEvalDOCVQA(TaskEval):
             images.append(item['image'])
             questions.append(item['labels']["question"])
             answers.append(item['labels']["answers"])
-   
         transform = self.image_preprocess_eval
         images = torch.stack([transform(img) for img in images])
-    
         return {
             "images": images,
             "questions": questions,
@@ -191,7 +190,7 @@ class TaskCrullerEvalDOCVQA(TaskEval):
             "image_ids": image_ids,
             "question_ids": question_ids,
         }
-    
+
     def step(self, batch):
         """
         Does one step of evaluation for DOCVQA. 
