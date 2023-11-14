@@ -109,7 +109,7 @@ class TaskTrain(Task):
     def setup(
             self,
             num_batches_per_interval: int,
-            resume: Optional[bool] = None,
+            resume: Optional[str] = "",
     ):
         """
         FIXME this interface needs refinement
@@ -149,8 +149,7 @@ class TaskTrain(Task):
             )
 
             if resume:
-                raise NotImplementedError("Resume is not implemented in task. Part of DDP resume exists in train.py")
-                state_dict = load_checkpoint("")
+                state_dict = load_checkpoint(resume)
                 self.load_state_dict(state_dict)
 
             if self.device_env.world_size > 1:
@@ -346,7 +345,6 @@ class TaskTrain(Task):
             start_interval=None,
             restore_optimizer_state=True,
             restore_scheduler_state=True,
-            restore_step_state=True,
     ):
         def _clean(_sd):
             return {k[7:] if k.startswith('module.') else k: v for k, v in _sd.items()}
@@ -369,7 +367,6 @@ class TaskTrain(Task):
             # restore LR schedule / step / interval related state
             if 'scheduler' in state_dict:
                 self.scheduler.load_state_dict(state_dict['scheduler'])
-        if restore_step_state:
             if 'step_idx' in state_dict:
                 self.step_idx = state_dict['step_idx']
             if 'batch_idx' in state_dict:

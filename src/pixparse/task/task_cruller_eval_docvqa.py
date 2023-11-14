@@ -15,7 +15,7 @@ import numpy as np
 from pixparse.data import preprocess_ocr_anno, preprocess_text_anno, create_transforms
 from pixparse.data.loader import BaseCollate
 from pixparse.framework import (DeviceEnv, Monitor, TaskEval, TaskEvalCfg)
-from pixparse.models import Cruller, ModelCfg, get_model_config, ModelArgs, create_model
+from pixparse.models import Cruller, ModelCfg, get_model_config, ModelArgs, create_model, resize_model_embeddings
 from pixparse.tokenizers import TokenizerCfg, create_tokenizer
 from pixparse.utils.json_utils import json2token, token2json
 from pixparse.utils.json_utils import JSONParseEvaluator
@@ -68,21 +68,35 @@ class TaskCrullerEvalDOCVQA(TaskEval):
         self.text_anno_fn = True  # set for image-text dataset experiments
         self.tokenizer = create_tokenizer(cfg.tokenizer)
 
-        self.resume = False
-        docvqa_finetune_tokens = [
+        special_tokens_from_pretrain = [
             "<sep/>",  # JSON list separator
+            "<s_pretrain>",  # task start (based on dataset/task)
+        ]
+        
+        num_pretrain_tokens = self.tokenizer.add_special_tokens(
+            {"additional_special_tokens": sorted(set(additional_special_tokens))}
+        )
+
+        finetuning_special_tokens = [
             self.task_start_token,  # task start (based on dataset/task)
             self.prompt_end_token,  # prompt end (or task_start for pretrain)
             "<s_question>",
             "</s_question>",
             "</s_answer>",
         ]
+        additional_special_tokens = special_tokens_from_pretrain + finetuning_special_tokens 
 
-        # ---- add pretraining tokens 
-        special_tokens_from_pretrain = [
-            "<sep/>",  # JSON list separator
-            "<s_pretrain>",  # task start (based on dataset/task)
-        ]
+        num_finetuning_tokens = self.tokenizer.add_special_tokens(
+            {"additional_special_tokens": sorted(set(additional_special_tokens))}, replace_additional_special_tokens=False
+        )
+        
+                
+        self.model = create_model(
+            model_cfg,
+            pretrained=checkpoint_path, 
+            num_new_tokens=num_pretrain_tokens + num_finetuning_tokens
+        )
+
 
         preproc_fn = preprocess_text_anno if self.text_anno_fn else preprocess_ocr_anno
         self.anno_preprocess_eval = partial(

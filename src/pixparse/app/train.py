@@ -31,9 +31,8 @@ class TrainCfg(Serializable):
     experiment: Optional[str] = None  # experiment name, auto-generated if None or required?
     output_dir: str = './output'
     log_filename: str = 'out.log'
-    resume: bool = False # TODO test Union[bool, str] instead for flexibility
-    # resume_path: str = ""  # resume checkpoint path w/ full model + optimizer state
-    checkpoint_path: str = ""
+    resume: Optional[str] = ""  # resume checkpoint path w/ full model + optimizer state
+    checkpoint_path: Optional[str] = "" # general checkpoint path to initialize model with
     output_checkpoint_dir: Optional[str] = None  # default output_dir/checkpoints
     seed: int = 42
 
@@ -65,7 +64,7 @@ def train(
             os.makedirs(checkpoint_dir, exist_ok=True)
             torch.save(task.state_dict(), os.path.join(checkpoint_dir, f'checkpoint-{i}.pt'))
 
-
+"""
 def load_checkpoint_cases(train_cfg, task):
     # ----- Model resuming from checkpoint (non-fsdp) -----
     if train_cfg.resume:
@@ -74,9 +73,6 @@ def load_checkpoint_cases(train_cfg, task):
                 f"resume set to {train_cfg.resume} and experiment directory not found at {train_cfg.experiment}.")
         # FIXME add 'resume_latest' mode that scans experiment path for latest checkpoint
         raise NotImplementedError("resume is not implemented yet. ")
-        """
-        checkpoint_path = train_cfg.resume_path
-        """
         if checkpoint_path.startswith('s3'):
             _logger.info("s3 bucket specified. Loading checkpoint from s3 for resuming.")
         else:
@@ -96,9 +92,8 @@ def load_checkpoint_cases(train_cfg, task):
             checkpoint,
             restore_optimizer_state=False,
             restore_scheduler_state=False,
-            restore_step_state=False
             )
-
+"""
 
 parser = ArgumentParser(
     add_option_string_dash_variants=simple_parsing.DashVariant.DASH,
@@ -161,10 +156,12 @@ def main():
         train_cfg.task,
         device_env=device_env,
         monitor=monitor,
+        checkpoint_path=train_cfg.checkpoint_path, # Maybe we pass directly the train_cfg object to init? - molbap
+        resume=train_cfg.resume
     )
 
     # FIXME Move this functionality to task_cls instance init so that all weight init is in init
-    load_checkpoint_cases(train_cfg, task)
+    # load_checkpoint_cases(train_cfg, task)
 
     output_checkpoint_dir = train_cfg.output_checkpoint_dir or os.path.join(experiment_path, 'checkpoints')
     os.makedirs(output_checkpoint_dir, exist_ok=True)
@@ -187,6 +184,7 @@ def main():
     )
     task.setup(
         num_batches_per_interval=loaders['train'].num_batches,
+        checkpoint_path=train_cfg.checkpoint_path,
         resume=train_cfg.resume,
     )
 

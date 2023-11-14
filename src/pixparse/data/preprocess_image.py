@@ -145,7 +145,7 @@ def better_transforms(
             ),
             transforms.RandomApply([
                 Bitmap()
-            ],
+                ],
                 p=.05
             ),
             transforms.RandomApply([
