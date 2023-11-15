@@ -154,9 +154,8 @@ def main():
     )
 
     selected_args = ['task', 'resume', 'checkpoint_path']
-    selected_non_default_args = get_selected_non_default_args(train_cfg, selected_args)
-
-
+    rename_map = {'task': 'cfg'}
+    selected_non_default_args = get_selected_non_default_args(train_cfg, selected_args, rename_map)
     task = task_cls(
         **selected_non_default_args,
         device_env=device_env,

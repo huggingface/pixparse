@@ -1,7 +1,9 @@
 import dataclasses
 from dataclasses import fields
 
-def get_selected_non_default_args(dataclass_instance, arg_names):
+from typing import Optional
+
+def get_selected_non_default_args(dataclass_instance, arg_names, rename_map: Optional[dict] = {}):
     """
     Extracts a subset of non-default arguments from a dataclass instance.
 
@@ -11,6 +13,7 @@ def get_selected_non_default_args(dataclass_instance, arg_names):
     Parameters:
     - dataclass_instance: An instance of a dataclass from which to extract arguments.
     - arg_names: A list of strings representing the names of the arguments to be considered.
+    - rename_map: Optional dictionary to rename argument keys.
 
     Returns:
     - A dictionary containing key-value pairs of argument names and their values,
@@ -25,6 +28,7 @@ def get_selected_non_default_args(dataclass_instance, arg_names):
                 default_value = field.default_factory()
 
             if value != default_value:
-                selected_non_default_args[field.name] = value
+                key = rename_map[field.name] if rename_map and field.name in rename_map else field.name
+                selected_non_default_args[key] = value
 
     return selected_non_default_args
