@@ -150,7 +150,7 @@ class TaskTrain(Task):
 
             if resume:
                 state_dict = load_checkpoint(resume)
-                self.load_state_dict(state_dict)
+                self.load_state_dict(state_dict, restore_optimizer_state=True, restore_scheduler_state=True)
 
             if self.device_env.world_size > 1:
                 self._distribute_model()

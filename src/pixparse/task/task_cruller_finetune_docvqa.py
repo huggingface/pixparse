@@ -85,7 +85,6 @@ class TaskCrullerFinetuneDOCVQA(TaskTrain):
         device_env: DeviceEnv,
         monitor: Monitor = None,
         checkpoint_path: str = "",
-        resume: str = "",
     ):
         super().__init__(
             cfg=cfg,
@@ -105,8 +104,6 @@ class TaskCrullerFinetuneDOCVQA(TaskTrain):
         self.max_position_embeddings = model_cfg.text_decoder.max_length
         self.text_anno_fn = True  # set for image-text dataset experiments
         self.tokenizer = create_tokenizer(cfg.tokenizer)
-
-        self.resume = resume
 
         # Setup task specific tokens NOTE: Donut appears to add tokens on the fly during dataset init, requires
         # iterating through full dataset on train start due to not being able to update once tokenizers passed through
@@ -171,7 +168,7 @@ class TaskCrullerFinetuneDOCVQA(TaskTrain):
             max_length=128  # FIXME derive from config
         )
 
-    def setup(self, num_batches_per_interval: int):
+    def setup(self, num_batches_per_interval: int, resume: str):
         """
         Overrides the setup method to add additional setup steps specific to TaskCrullerFinetuneDOCVQA.
         The additional setup step is adding finetuning tokens.
@@ -180,15 +177,15 @@ class TaskCrullerFinetuneDOCVQA(TaskTrain):
             num_batches_per_interval: Number of batches per interval.
             resume: Flag indicating whether to resume from a checkpoint.
         """
-        if self.resume:
-            if self.resume == "latest":
-                self.resume = get_latest_checkpoint(self.resume)
-            state_dict = load_checkpoint(self.resume)
+        if resume:
+            if resume == "latest":
+                resume = get_latest_checkpoint(resume)
+            state_dict = load_checkpoint(resume)
             self.load_state_dict(state_dict)
 
         self.model.text_decoder.trunk.model.decoder.embed_tokens.padding_idx = self.tokenizer.pad_token_id
 
-        super().setup(num_batches_per_interval, self.resume)
+        super().setup(num_batches_per_interval=num_batches_per_interval, resume=resume)
 
     def collate_fn(self, batch):
         return self.collator(batch)

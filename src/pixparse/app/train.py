@@ -13,7 +13,7 @@ import torch
 from pixparse.data import DataCfg, create_loader
 from pixparse.framework import (DeviceEnv, Monitor, train_one_interval, evaluate, setup_logging, random_seed,
                                 TaskTrain, TaskTrainCfg)
-from pixparse.utils import clean_name, load_checkpoint
+from pixparse.utils import clean_name, load_checkpoint, get_selected_non_default_args
 from pixparse.task import get_train_task_from_cfg, get_train_task_cfgs
 
 from chug.common import LoaderBundle
@@ -152,12 +152,16 @@ def main():
         tensorboard=train_cfg.tensorboard,
         output_enabled=device_env.is_primary(),
     )
+
+    selected_args = ['task', 'resume', 'checkpoint_path']
+    selected_non_default_args = get_selected_non_default_args(train_cfg, selected_args)
+
+
     task = task_cls(
-        train_cfg.task,
+        **selected_non_default_args,
         device_env=device_env,
         monitor=monitor,
-        checkpoint_path=train_cfg.checkpoint_path, # Maybe we pass directly the train_cfg object to init? - molbap
-        resume=train_cfg.resume
+
     )
 
     # FIXME Move this functionality to task_cls instance init so that all weight init is in init
