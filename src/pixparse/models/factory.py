@@ -4,7 +4,7 @@ from enum import Enum
 
 from .config import ModelCfg, get_model_config
 from .cruller import Cruller
-from ..utils import load_checkpoint, check_exists
+from ..utils import load_checkpoint, check_exists, clean_state_dict
 import torch
 
 
@@ -32,23 +32,24 @@ def get_model(model_cfg: Union[str, ModelCfg]):
         raise ValueError(f"Invalid model type, got {model_cfg.type}, supported models are  {valid_types}")
     return model_type(model_cfg)
 
-def resize_model_embeddings(model, num_new_tokens: int):
+def resize_model_embeddings(model, new_vocab_size: int):
     # TODO make this method call the right resize depending on model structure. 
-    model.text_decoder.trunk.resize_token_embeddings(num_new_tokens)
+    model.text_decoder.trunk.resize_token_embeddings(new_vocab_size)
 
 
 def create_model(
         model_name_or_cfg: Union[str, ModelCfg],
+        new_vocab_size: Optional[int] = 0,
         pretrained: Optional[str] = '',
-        num_new_tokens: Optional[int] = 0,
 ):
     """
     Creates and initializes a model based on the given configuration and optional pretrained state.
 
     Args:
         model_name_or_cfg (Union[str, ModelCfg]): The name of the model or its configuration.
+        new_vocab_size (int, optional): New number of tokens that will resize the embeddings. Defaults to 0, 
+                              which will not resize embeddings.
         pretrained (str, optional): Path to the pretrained model's state. Defaults to ''.
-        num_new_tokens (int, optional): Number of new tokens to add to the model's embeddings. Defaults to 0.
 
     Returns:
         The initialized model.
@@ -60,17 +61,17 @@ def create_model(
         model_cfg = model_name_or_cfg
 
     model = get_model(model_cfg)
+    if new_vocab_size > 0:
+        resize_model_embeddings(model, new_vocab_size)
 
     if pretrained:
         if check_exists(pretrained):
             # FIXME replace with a load fn that can adapt resolutions, input channels, heads, etc
             checkpoint = load_checkpoint(pretrained)
-            model.load_state_dict(checkpoint['model'])
+            state_dict = clean_state_dict(checkpoint['model'])
+            model.load_state_dict(state_dict)
         else:
             assert False, 'other pretrained modes WIP'
-
-    if num_new_tokens > 0:
-        resize_model_embeddings(model, num_new_tokens)
 
     return model
 

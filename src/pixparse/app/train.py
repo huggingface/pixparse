@@ -184,8 +184,6 @@ def main():
     )
     task.setup(
         num_batches_per_interval=loaders['train'].num_batches,
-        checkpoint_path=train_cfg.checkpoint_path,
-        resume=train_cfg.resume,
     )
 
     if device_env.is_primary():

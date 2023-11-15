@@ -13,7 +13,7 @@ import timm.utils
 from timm.optim import create_optimizer_v2
 from timm.scheduler import create_scheduler_v2
 
-from pixparse.utils import load_checkpoint
+from pixparse.utils import load_checkpoint, clean_state_dict
 from .config import TaskTrainCfg, TaskEvalCfg
 from .device import DeviceEnv
 from .fsdp import fsdp_wrap_model
@@ -346,13 +346,10 @@ class TaskTrain(Task):
             restore_optimizer_state=True,
             restore_scheduler_state=True,
     ):
-        def _clean(_sd):
-            return {k[7:] if k.startswith('module.') else k: v for k, v in _sd.items()}
-
         # assume state_dict contains only model if key not present
         state_dict_model = state_dict.get('model', state_dict)
         if not hasattr(self.model, 'module'):
-            state_dict_model = _clean(state_dict_model)
+            state_dict_model = clean_state_dict(state_dict_model)
         self.model.load_state_dict(state_dict_model)
 
         if 'optimizer' not in state_dict:

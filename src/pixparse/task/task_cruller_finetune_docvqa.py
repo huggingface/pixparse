@@ -119,12 +119,12 @@ class TaskCrullerFinetuneDOCVQA(TaskTrain):
         ]
         
         num_pretrain_tokens = self.tokenizer.add_special_tokens(
-            {"additional_special_tokens": sorted(set(additional_special_tokens))}
+            {"additional_special_tokens": sorted(set(special_tokens_from_pretrain))}
         )
         self.model = create_model(
             model_cfg,
             pretrained=checkpoint_path, 
-            num_new_tokens=num_pretrain_tokens
+            new_vocab_size=len(self.tokenizer)
         )
 
         finetuning_special_tokens = [
@@ -134,13 +134,12 @@ class TaskCrullerFinetuneDOCVQA(TaskTrain):
             "</s_question>",
             "</s_answer>",
         ]
-        additional_special_tokens = special_tokens_from_pretrain + finetuning_special_tokens 
 
         num_finetuning_tokens = self.tokenizer.add_special_tokens(
-            {"additional_special_tokens": sorted(set(additional_special_tokens))}, replace_additional_special_tokens=False
+            {"additional_special_tokens": sorted(set(finetuning_special_tokens))}, replace_additional_special_tokens=False
         )
-
-        resize_model_embeddings(self.model, num_new_tokens=num_finetuning_tokens)
+        if num_finetuning_tokens > 0:
+            resize_model_embeddings(self.model, new_vocab_size=len(self.tokenizer))
 
         self.loss = nn.CrossEntropyLoss(ignore_index=-100)
         self.has_no_sync = False

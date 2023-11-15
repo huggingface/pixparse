@@ -2,6 +2,8 @@ import torch
 import fsspec
 from typing import Optional
 
+def clean_state_dict(state_dict):
+    return {k[7:] if k.startswith('module.') else k: v for k, v in state_dict.items()}
 
 def load_checkpoint(path: str, map_location='cpu'):
     with fsspec.open(path, "rb") as f:
