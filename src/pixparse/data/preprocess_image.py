@@ -50,6 +50,8 @@ def create_transforms(
         return better_transforms(**basic_args, **adv_args)
     elif name == 'nougat':
         return nougat_transforms(**basic_args, **adv_args)
+    elif name == 'basic':
+        return basic_transforms(**basic_args, **adv_args)
     else:
         return legacy_transforms(**basic_args)
 
@@ -71,6 +73,44 @@ def legacy_transforms(
         )
     ])
     return pp
+
+
+def basic_transforms(
+        input_cfg: ImageInputCfg,
+        training=True,
+        interpolation='bicubic',
+        crop_margin=False,
+        align_long_axis=False,
+        fill=255,
+):
+    # an improved torchvision + custom op transforms (no albumentations)
+    image_size = input_cfg.image_size
+    interpolation_mode = timm.data.transforms.str_to_interp_mode(interpolation)
+
+    pp = []
+    if crop_margin:
+        assert has_cv2, 'CV2 needed to use crop margin.'
+        pp += [CropMargin()]
+    if align_long_axis:
+        pp += [AlignLongAxis(image_size, interpolation=interpolation_mode)]
+
+    if training:
+        pp += [
+            RandomPad(image_size, fill=fill),
+            transforms.CenterCrop(image_size),
+        ]
+    else:
+        pp += [
+            ResizeKeepRatio(image_size, longest=1, interpolation=interpolation),
+            CenterCropOrPad(image_size, fill=fill),
+        ]
+
+    pp += [
+        transforms.ToTensor(),
+        transforms.Normalize(input_cfg.image_mean, input_cfg.image_std),
+    ]
+
+    return transforms.Compose(pp)
 
 
 def better_transforms(
@@ -249,15 +289,16 @@ def nougat_transforms(
         alb.Normalize(input_cfg.image_mean, input_cfg.image_std),
         alb.pytorch.ToTensorV2(),
     ]
-    tv_pp += [alb_wrapper(alb.Compose(alb_pp))]
+    tv_pp += [AlbWrapper(alb.Compose(alb_pp))]
     return transforms.Compose(tv_pp)
 
 
-def alb_wrapper(transform):
-    def f(im):
-        return transform(image=np.asarray(im))["image"]
+class AlbWrapper:
+    def __init__(self, transform):
+        self.transform = transform
 
-    return f
+    def __call__(self, im):
+        return self.transform(image=np.asarray(im))["image"]
 
 
 class CropMargin:
@@ -486,7 +527,6 @@ if has_albumentations:
             img = cv2.erode(img, kernel, iterations=1)
             return img
 
-
     class DilationAlb(alb.ImageOnlyTransform):
         def __init__(self, scale, always_apply=False, p=0.5):
             super().__init__(always_apply=always_apply, p=p)
@@ -504,7 +544,6 @@ if has_albumentations:
             img = cv2.dilate(img, kernel, iterations=1)
             return img
 
-
     class BitmapAlb(alb.ImageOnlyTransform):
         def __init__(self, value=0, lower=200, always_apply=False, p=0.5):
             super().__init__(always_apply=always_apply, p=p)
@@ -515,5 +554,3 @@ if has_albumentations:
             img = img.copy()
             img[img < self.lower] = self.value
             return img
-
-

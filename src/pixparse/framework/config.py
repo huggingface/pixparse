@@ -57,4 +57,7 @@ class TaskTrainCfg(TaskCfg):
 
 @dataclass
 class TaskEvalCfg(TaskCfg):
-    pass
+    model: ModelArgs = field(default_factory=ModelArgs)
+    tokenizer: Optional[TokenizerCfg] = None
+    image_transforms: str = ""  # Can be "better", "nougat" or ""
+    num_intervals: int = 100

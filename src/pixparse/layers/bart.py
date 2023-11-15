@@ -46,6 +46,7 @@ class PixParseBartAttention(nn.Module):
             self.k_norm = nn.Identity()
         self.out_proj = nn.Linear(embed_dim, embed_dim, bias=bias)
 
+    # FIXME _shape name is ambiguous
     def _shape(self, tensor: torch.Tensor, seq_len: int, bsz: int):
         return tensor.view(bsz, seq_len, self.num_heads, self.head_dim).transpose(1, 2).contiguous()
 
@@ -288,6 +289,9 @@ class PixParseBartDecoderLayer(nn.Module):
 
 
 def convert_bart_pp(module: nn.Module, config: BartConfig, qk_norm_cross=False, qk_norm=False):
+    """
+    Utility to convert HF Bart to pixparse Bart.
+    """
     module_output = module
     if isinstance(module, BartDecoderLayer):
         module_output = PixParseBartDecoderLayer(
@@ -316,3 +320,45 @@ def convert_bart_pp(module: nn.Module, config: BartConfig, qk_norm_cross=False, 
     return module_output
 
 
+def _resize_embeddings(weight: torch.Tensor, max_length: int) -> torch.Tensor:
+    """
+    Helper method to resize embeddings tensor.
+    """
+    print(weight.shape)
+    if weight.size(0) > max_length:
+        # Truncate the positional embeddings if necessary
+        resized_weight = weight[:max_length, :]
+    else:
+        # Interpolate the positional embeddings if necessary
+        resized_weight = F.interpolate(
+            weight.unsqueeze(0).permute(0, 2, 1),
+            size=max_length,
+            mode='linear',
+            align_corners=False
+        ).squeeze(0).permute(1, 0)
+    print(resized_weight.shape)
+
+    return resized_weight
+
+
+def resize_positional_embeddings(module: nn.Module, max_length: int) -> nn.Module:
+    """
+    Resizes the `decoder.embed_positions.weight` of bart. 
+    # FIXME model summary weights are not updated with the current method, so the print is unreliable.
+    """
+    if max_length != module.config.max_position_embeddings:
+        module.model.decoder.embed_positions.weight = torch.nn.Parameter(
+            _resize_embeddings(
+                module.model.decoder.embed_positions.weight,
+                max_length
+                + 2,  # https://github.com/huggingface/transformers/blob/v4.11.3/src/transformers/models/mbart/modeling_mbart.py#L118-L119
+            )
+        )
+
+        module.config.max_position_embeddings = max_length
+
+    return module
+
+
+# When generating with fsdp, make sure to use the forward function from the unwrapped model
+# 

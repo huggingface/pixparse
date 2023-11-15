@@ -11,9 +11,9 @@ from simple_parsing.helpers import Serializable
 import torch
 
 from pixparse.data import DataCfg, create_loader
-from pixparse.framework import DeviceEnv, Monitor, train_one_interval, evaluate, setup_logging, random_seed,\
-    TaskTrain, TaskTrainCfg
-from pixparse.utils import clean_name, load_checkpoint
+from pixparse.framework import (DeviceEnv, Monitor, train_one_interval, evaluate, setup_logging, random_seed,
+                                TaskTrain, TaskTrainCfg)
+from pixparse.utils import clean_name, load_checkpoint, get_selected_non_default_args
 from pixparse.task import get_train_task_from_cfg, get_train_task_cfgs
 
 from chug.common import LoaderBundle
@@ -31,8 +31,8 @@ class TrainCfg(Serializable):
     experiment: Optional[str] = None  # experiment name, auto-generated if None or required?
     output_dir: str = './output'
     log_filename: str = 'out.log'
-    resume_path: str = ""  # resume checkpoint path w/ full model + optimizer state
-    checkpoint_path: str = ""
+    resume: Optional[str] = ""  # resume checkpoint path w/ full model + optimizer state
+    checkpoint_path: Optional[str] = "" # general checkpoint path to initialize model with
     output_checkpoint_dir: Optional[str] = None  # default output_dir/checkpoints
     seed: int = 42
 
@@ -64,6 +64,36 @@ def train(
             os.makedirs(checkpoint_dir, exist_ok=True)
             torch.save(task.state_dict(), os.path.join(checkpoint_dir, f'checkpoint-{i}.pt'))
 
+"""
+def load_checkpoint_cases(train_cfg, task):
+    # ----- Model resuming from checkpoint (non-fsdp) -----
+    if train_cfg.resume:
+        if not train_cfg.experiment:
+            raise ValueError(
+                f"resume set to {train_cfg.resume} and experiment directory not found at {train_cfg.experiment}.")
+        # FIXME add 'resume_latest' mode that scans experiment path for latest checkpoint
+        raise NotImplementedError("resume is not implemented yet. ")
+        if checkpoint_path.startswith('s3'):
+            _logger.info("s3 bucket specified. Loading checkpoint from s3 for resuming.")
+        else:
+            _logger.info("Loading checkpoint from local path for resuming.")
+        checkpoint = load_checkpoint(checkpoint_path)
+        task.load_state_dict(checkpoint, restore_optimizer_state=True)
+    # ----- Model being finetuned from checkpoint (non-fsdp) ----
+    elif train_cfg.checkpoint_path:
+        # FIXME improve naming/separation between resume and finetune, assert both can't be used at the same time!
+        checkpoint_path = train_cfg.checkpoint_path
+        if checkpoint_path.startswith('s3'):
+            _logger.info("s3 bucket specified. Loading checkpoint from s3 for finetuning.")
+        else:
+            _logger.info("Loading checkpoint from local path for finetuning.")
+        checkpoint = load_checkpoint(checkpoint_path)
+        task.load_state_dict(
+            checkpoint,
+            restore_optimizer_state=False,
+            restore_scheduler_state=False,
+            )
+"""
 
 parser = ArgumentParser(
     add_option_string_dash_variants=simple_parsing.DashVariant.DASH,
@@ -122,11 +152,19 @@ def main():
         tensorboard=train_cfg.tensorboard,
         output_enabled=device_env.is_primary(),
     )
+
+    selected_args = ['task', 'resume', 'checkpoint_path']
+    rename_map = {'task': 'cfg'}
+    selected_non_default_args = get_selected_non_default_args(train_cfg, selected_args, rename_map)
     task = task_cls(
-        train_cfg.task,
+        **selected_non_default_args,
         device_env=device_env,
         monitor=monitor,
+
     )
+
+    # FIXME Move this functionality to task_cls instance init so that all weight init is in init
+    # load_checkpoint_cases(train_cfg, task)
 
     output_checkpoint_dir = train_cfg.output_checkpoint_dir or os.path.join(experiment_path, 'checkpoints')
     os.makedirs(output_checkpoint_dir, exist_ok=True)
@@ -135,7 +173,7 @@ def main():
         _logger.info(train_cfg)
 
     loaders = {}
-    assert train_cfg.train_data is not None, f"Train dataset (data_cfg.train) must be set."
+    assert train_cfg.train_data is not None, f"Train dataset (train_cfg.train_data) must be set."
     loaders['train'] = create_loader(
         train_cfg.train_data,
         is_train=True,
@@ -149,7 +187,6 @@ def main():
     )
     task.setup(
         num_batches_per_interval=loaders['train'].num_batches,
-        resume_path=train_cfg.resume_path,
     )
 
     if device_env.is_primary():

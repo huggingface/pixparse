@@ -6,13 +6,14 @@ from functools import partial
 from typing import Any, Dict, Optional, Tuple, Union
 
 import torch
+import torch.nn.functional as F
 
 import timm
 import timm.utils
 from timm.optim import create_optimizer_v2
 from timm.scheduler import create_scheduler_v2
 
-from pixparse.utils import load_checkpoint
+from pixparse.utils import load_checkpoint, clean_state_dict
 from .config import TaskTrainCfg, TaskEvalCfg
 from .device import DeviceEnv
 from .fsdp import fsdp_wrap_model
@@ -108,7 +109,7 @@ class TaskTrain(Task):
     def setup(
             self,
             num_batches_per_interval: int,
-            resume_path: Optional[str] = None,
+            resume: Optional[str] = "",
     ):
         """
         FIXME this interface needs refinement
@@ -121,7 +122,7 @@ class TaskTrain(Task):
 
         Args:
             num_batches_per_interval: pass info from data pipeline for LR scheduling
-            resume_path: path for train state resume checkpoint
+            resume: # TODO should be a union of bool and str, selecting most recent checkpoint or the one wanted by user
         Returns:
 
         """
@@ -140,16 +141,16 @@ class TaskTrain(Task):
             )
 
             # TODO support resume
-            assert not resume_path
+            assert not resume
         else:
             # DDP or no parallelization
             self._setup_optimization(
                 num_batches_per_interval=num_batches_per_interval,
             )
 
-            if resume_path:
-                state_dict = load_checkpoint(resume_path)
-                self.load_state_dict(state_dict)
+            if resume:
+                state_dict = load_checkpoint(resume)
+                self.load_state_dict(state_dict, restore_optimizer_state=True, restore_scheduler_state=True)
 
             if self.device_env.world_size > 1:
                 self._distribute_model()
@@ -343,14 +344,12 @@ class TaskTrain(Task):
             state_dict,
             start_interval=None,
             restore_optimizer_state=True,
+            restore_scheduler_state=True,
     ):
-        def _clean(_sd):
-            return {k[7:] if k.startswith('module.') else k: v for k, v in _sd.items()}
-
         # assume state_dict contains only model if key not present
         state_dict_model = state_dict.get('model', state_dict)
         if not hasattr(self.model, 'module'):
-            state_dict_model = _clean(state_dict_model)
+            state_dict_model = clean_state_dict(state_dict_model)
         self.model.load_state_dict(state_dict_model)
 
         if 'optimizer' not in state_dict:
@@ -361,16 +360,16 @@ class TaskTrain(Task):
             self.optimizer.load_state_dict(state_dict['optimizer'])
             if 'scaler' in state_dict:
                 self.scaler.load_state_dict(state_dict['scaler'])
-
-        # restore LR schedule / step / interval related state
-        if 'scheduler' in state_dict:
-            self.scheduler.load_state_dict(state_dict['scheduler'])
-        if 'step_idx' in state_dict:
-            self.step_idx = state_dict['step_idx']
-        if 'batch_idx' in state_dict:
-            self.batch_idx = state_dict['batch_idx']
-        if start_interval is not None:
-            # override saved interval
-            self.interval_idx = start_interval
-        elif 'interval_idx' in state_dict:
-            self.interval_idx = state_dict['interval_idx']
+        if restore_scheduler_state:
+            # restore LR schedule / step / interval related state
+            if 'scheduler' in state_dict:
+                self.scheduler.load_state_dict(state_dict['scheduler'])
+            if 'step_idx' in state_dict:
+                self.step_idx = state_dict['step_idx']
+            if 'batch_idx' in state_dict:
+                self.batch_idx = state_dict['batch_idx']
+            if start_interval is not None:
+                # override saved interval
+                self.interval_idx = start_interval
+            elif 'interval_idx' in state_dict:
+                self.interval_idx = state_dict['interval_idx']
