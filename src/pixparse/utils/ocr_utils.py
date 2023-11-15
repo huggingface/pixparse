@@ -76,7 +76,6 @@ def get_ocr_metrics(
         decoded_texts = [
             re.sub(r"<.*?>", "", re.sub("\n", " ", text)) for text in decoded_texts
         ]
-
         # FIXME sometimes we are decoding no text at all after cleaning
         filtered = [
             (ref, pred)

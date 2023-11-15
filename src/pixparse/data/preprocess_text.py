@@ -41,10 +41,8 @@ def preprocess_text_anno(
     """
     text = task_start_token + anno + tokenizer.eos_token
 
-    tokenizer_fn = tokenize(tokenizer, text, max_position_embeddings)
-
-    text = tokenizer_fn(text)
-
+    text = tokenize(tokenizer, text, max_position_embeddings)
+    
     target = text.clone()
     # model doesn't need to predict pad token
     target[target == tokenizer.pad_token_id] = ignore_id
