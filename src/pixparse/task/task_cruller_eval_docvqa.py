@@ -106,36 +106,6 @@ class TaskCrullerEvalDOCVQA(TaskEval):
             task_start_token=self.task_start_token,
             prompt_end_token=self.prompt_end_token,
         )
-        self.model = create_model(
-            model_cfg,
-            pretrained='',
-        )
-        # ---- Add pretraining tokens
-
-        newly_added_num_from_pretrain = self.tokenizer.add_special_tokens(
-            {"additional_special_tokens": sorted(set(special_tokens_from_pretrain))}
-        )
-        # need to resize embeddings from pretrained model in order to load it
-        if newly_added_num_from_pretrain > 0:
-            self.model.text_decoder.trunk.resize_token_embeddings(
-                len(self.tokenizer)
-            )
-
-        # ---- Add finetuning tokens
-
-        newly_added_num = self.tokenizer.add_special_tokens(
-            {"additional_special_tokens": sorted(set(docvqa_finetune_tokens))}
-        )
-        self.vocab_size = len(self.tokenizer)
-        # We resize token embeddings after initializing
-        if newly_added_num > 0:
-            self.model.text_decoder.trunk.resize_token_embeddings(
-                len(self.tokenizer)
-            )
-        # ------ Load checkpoint (debug)
-        state_dict = torch.load(checkpoint_path)['model']
-        eval_state_dict = {k.replace("module.", ""): v for k, v in state_dict.items()}
-        self.model.load_state_dict(eval_state_dict)
 
         self.has_no_sync = False
 
