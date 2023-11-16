@@ -1,49 +1,33 @@
 import logging
+import time
 from dataclasses import dataclass, field
 from functools import partial
-from typing import Optional
 
 import torch
 import torchvision.transforms as transforms
 
-
 from pixparse.framework import TaskEvalCfg, TaskEval, DeviceEnv, Monitor
-from pixparse.models import Cruller, ModelCfg, get_model_config
-from pixparse.tokenizers import TokenizerHF, TokenizerCfg
-from pixparse.data import preprocess_text_anno
+from pixparse.models import ModelArgs, create_model
+from pixparse.tokenizers import create_tokenizer, TokenizerCfg
+from pixparse.data import preprocess_text_anno, create_transforms
 from pixparse.utils import get_ocr_metrics
 
 from chug.common import LoaderBundle
 
 _logger = logging.getLogger(__name__)
 
-import time
-
 
 @dataclass
 class TaskCrullerEvalOCRCfg(TaskEvalCfg):
-    model_name: Optional[
-        str
-    ] = None  # if model_name set, loads a pre-defined config in models/configs
-    model: ModelCfg = field(
-        default_factory=ModelCfg
-    )  # FIXME rename model_cfg to diff from model_name?
-    tokenizer: TokenizerCfg = field(default_factory=TokenizerCfg)
+    model: ModelArgs = field(default_factory=lambda: ModelArgs(
+        name='cruller_base',  # override model default in spec per task
+    ))
 
     def __post_init__(self):
-        # FIXME figure out how to get command line args to overlay on top pre-defined
-        # config but ONLY if they are specified on cmd line?
-        if self.model_name:
-            model = get_model_config(self.model_name)
-            if model is None:
-                _logger.warning(
-                    f"Model config for {self.model_name} was not found, using defaults."
-                )
-
-            else:
-                self.model = model
-        else:
-            self.model_name = "custom"
+        assert self.model.cfg is not None
+        if self.tokenizer is None:
+            # set tokenizer to text tower model name if not explicitly set
+            self.tokenizer = TokenizerCfg(name=self.model.cfg.text_decoder.name)
 
 
 class TaskCrullerEvalOCR(TaskEval):
@@ -51,7 +35,6 @@ class TaskCrullerEvalOCR(TaskEval):
     * First evaluation task, pull out bits of code and refactor as needed over time
     * should be adaptable to several datasets as long as they are formatted correctly?
      Or do we impose datasets specific to this eval task? makes more sense maybe
-    * Eval_step() is the singular method to accumulate metrics
     """
 
     def __init__(
@@ -60,6 +43,7 @@ class TaskCrullerEvalOCR(TaskEval):
         cfg: TaskCrullerEvalOCRCfg,
         device_env: DeviceEnv,
         monitor: Monitor = None,
+        checkpoint_path: str = "",
     ):
         super().__init__(
             cfg=cfg,
@@ -67,6 +51,7 @@ class TaskCrullerEvalOCR(TaskEval):
             monitor=monitor,
         )
         self.cfg = cfg
+        model_cfg = self.cfg.model.cfg
         # NOTE dtype is currently being used as 'amp dtype' only, ie the low precision type,
         #  we may want to differentiate different precision modes such as
         #  amp + dtype, pure float16/bfloat16, custom mixed prec, etc
@@ -78,71 +63,46 @@ class TaskCrullerEvalOCR(TaskEval):
 
         self.task_start_token = "<s_pretrain>"
         self.prompt_end_token = self.task_start_token
-        self.max_position_embeddings = cfg.model.text_decoder.max_length
+        self.max_position_embeddings = model_cfg.text_decoder.max_length
         self.text_anno_fn = True
-        self.tokenizer = TokenizerHF(cfg.tokenizer)
+        self.tokenizer = create_tokenizer(cfg.tokenizer)
         special_tokens = [
             "<sep/>",  # JSON list separator
             self.task_start_token,  # task start (based on dataset/task)
             self.prompt_end_token,  # prompt end (or task_start for pretrain)
         ]
-        newly_added_num = self.tokenizer.trunk.add_special_tokens(
+        newly_added_num = self.tokenizer.add_special_tokens(
             {"additional_special_tokens": sorted(set(special_tokens))}
         )
 
-        self.vocab_size = len(self.tokenizer.trunk)
+        self.vocab_size = len(self.tokenizer)
 
-        preproc_fn = preprocess_text_anno
+        preproc_fn = preprocess_text_anno 
+        
         self.anno_preprocess_eval = partial(
             preproc_fn,
-            tokenizer=self.tokenizer.trunk,
+            tokenizer=self.tokenizer,
             max_position_embeddings=self.max_position_embeddings,
             task_start_token=self.task_start_token,
             prompt_end_token=self.prompt_end_token,
         )
 
-        self.model = Cruller(cfg.model)
-
-        # We need to resize the token embeddings after the model has been initialized
-        if newly_added_num > 0:
-            self.model.text_decoder.trunk.resize_token_embeddings(
-                len(self.tokenizer.trunk)
-            )
+        self.model = create_model(
+            model_cfg,
+            pretrained=checkpoint_path, 
+            new_vocab_size=self.vocab_size,
+        )
 
         self.has_no_sync = False
-        self.num_image_chs = 1 if cfg.model.image_encoder.image_fmt == "L" else 3
 
-        # TODO refactor, used in many tasks
-        img_mean = self.model.image_encoder.trunk.pretrained_cfg["mean"]
-        img_std = self.model.image_encoder.trunk.pretrained_cfg["std"]
-
-        self.img_mean = (
-            sum(img_mean) / len(img_mean)
-            if cfg.model.image_encoder.image_fmt == "L"
-            else img_mean
-        )
-        self.img_std = (
-            sum(img_std) / len(img_std)
-            if cfg.model.image_encoder.image_fmt == "L"
-            else img_std
-        )
-
-        # preprocessors cross both the task/model & dataset domain,
-        # created within task here and passed to data loaders
-        self.image_preprocess_eval = transforms.Compose(
-            [
-                transforms.ToTensor(),
-                transforms.Resize(
-                    cfg.model.image_encoder.image_size,
-                    interpolation=transforms.InterpolationMode.BICUBIC,
-                    antialias=True,
-                ),
-                # transforms.CenterCrop(448),  # FIXME need better aspect preserving resize & pad
-                transforms.Normalize(
-                    mean=self.img_mean,
-                    std=self.img_std,
-                ),
-            ]
+        self.image_input_cfg = self.model.image_encoder.traits.get('input')
+        self.image_preprocess_eval = create_transforms(
+            self.cfg.image_transforms,
+            input_cfg=self.image_input_cfg,
+            training=False,
+            interpolation='bicubic',
+            crop_margin=False,  # True?
+            align_long_axis=False,
         )
 
         # TODO These metrics have to be organized as dicts of dicts.
@@ -168,13 +128,17 @@ class TaskCrullerEvalOCR(TaskEval):
 
         return wrapper
 
+    def collate_fn(self, batch):
+        # For FUNSD, there is no collation needed as data is prepacked through chug
+        # but that makes this task interdependent with the data.
+        # Probably fine as a specific eval task, rename to eval_ocr_FUNSD?
+        return None
+
     def setup(self):
         """
         Weight initialization is deferred here. The state_dict to be loaded has to be created before, within the task.
         """
         device = self.device_env.device
-        self.model.load_state_dict(self.resume_state_dict)
-
         self.model.eval()
         self.model.to(device)
 

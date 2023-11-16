@@ -6,6 +6,27 @@ import torch
 _logger = logging.getLogger(__name__)
 
 
+def text_input_to_target(text_input, tokenizer, prompt_end_token, ignore_id=-100):
+    target = text_input.clone()
+    # model doesn't need to predict pad token
+    target[target == tokenizer.pad_token_id] = ignore_id
+    # model doesn't need to predict prompt (for VQA)
+    prompt_end_token_id = tokenizer.convert_tokens_to_ids(prompt_end_token)
+    target[: torch.nonzero(target == prompt_end_token_id).sum() + 1] = ignore_id
+    return target
+
+
+def tokenize(tokenizer, text, max_position_embeddings):
+    return tokenizer(
+        text,
+        add_special_tokens=False,
+        return_tensors="pt",
+        max_length=max_position_embeddings,
+        padding="max_length",
+        truncation=True,
+    ).input_ids[0]
+
+
 def preprocess_text_anno(
         anno,
         tokenizer: Callable,
@@ -20,22 +41,14 @@ def preprocess_text_anno(
     """
     text = task_start_token + anno + tokenizer.eos_token
 
-    tokenizer_fn = lambda x: tokenizer(
-        x,
-        add_special_tokens=False,
-        return_tensors='pt',
-        max_length=max_position_embeddings,
-        padding='max_length',
-        truncation=True).input_ids[0]
-
-    text = tokenizer_fn(text)
-
+    text = tokenize(tokenizer, text, max_position_embeddings)
+    
     target = text.clone()
     # model doesn't need to predict pad token
     target[target == tokenizer.pad_token_id] = ignore_id
     # model doesn't need to predict prompt (for VQA)
     prompt_end_token_id = tokenizer.convert_tokens_to_ids(prompt_end_token)
-    target[:torch.nonzero(target == prompt_end_token_id).sum() + 1] = ignore_id
+    target[: torch.nonzero(target == prompt_end_token_id).sum() + 1] = ignore_id
 
     return dict(text=[text], target=[target])
 
@@ -55,50 +68,40 @@ def preprocess_ocr_anno(
         _logger.warning("Old [id, {}] annotation form found, correcting...")
         anno = anno[1]
 
-    num_pages = len(anno['pages'])
+    num_pages = len(anno["pages"])
     if not num_pages:
         raise RuntimeError("Empty annotation. Skipping...")
 
-    tokenizer_fn = lambda x: tokenizer(
-        x,
-        add_special_tokens=False,
-        return_tensors='pt',
-        max_length=max_position_embeddings,
-        padding='max_length',
-        truncation=True).input_ids[0]
     pad_token_id = tokenizer.pad_token_id
     prompt_end_token_id = tokenizer.convert_tokens_to_ids(prompt_end_token)
 
     # FIXME for initial behaviour we will randomly sample one of N pages
     # TODO determine if we want to train in multi-page mode, use another sampling strategy?
     current_index = generator.randint(0, num_pages - 1)
-    if not anno['pages'][current_index]['text']:
+    if not anno["pages"][current_index]["text"]:
         current_index = get_next_valid_page_index(current_index, num_pages, anno)
-
 
     page_indices = []
     text_pages = []
     target_pages = []
-
-    n_wanted_pages = min(1, num_pages) #TODO increase that number for multipage processing
-
+    n_wanted_pages = min(1, num_pages)  # TODO increase that number for multipage processing
     while len(text_pages) < n_wanted_pages:
         # FIXME treating pages separately, this best approach or tokenize w/ page-break?
-        anno_page = anno['pages'][current_index]
-        if not anno_page['text']:
+        anno_page = anno["pages"][current_index]
+        if not anno_page["text"]:
             raise RuntimeError("No text on page, skipping...")
         # FIXME see self.donut_model.json2token, task specific json tokenization for
         #  the non-pretrain tasks varies w/ differing special tokens and prompts
-        text = '\n'.join(anno_page['text'])
+        text = "\n".join(anno_page["text"])
         orig_text = text
         text = task_start_token + text + tokenizer.eos_token
-        text = tokenizer_fn(text)
+        text = tokenize(tokenizer, text, max_position_embeddings)
 
         target = text.clone()
         # model doesn't need to predict pad token
         target[target == pad_token_id] = ignore_id
         # model doesn't need to predict prompt (e.g. VQA)
-        target[:torch.nonzero(target == prompt_end_token_id).sum() + 1] = ignore_id
+        target[: torch.nonzero(target == prompt_end_token_id).sum() + 1] = ignore_id
 
         text_pages.append(text)
         target_pages.append(target)
@@ -106,10 +109,11 @@ def preprocess_ocr_anno(
 
         current_index = get_next_valid_page_index(current_index, num_pages, anno)
 
+    info = dict(page_indices=page_indices, num_pages=num_pages, orig_text=orig_text)
+    return dict(text=text_pages, target=target_pages), info
 
-    return dict(text=text_pages, target=target_pages), dict(page_indices=page_indices, num_pages=num_pages, orig_text=orig_text)
 
-def get_next_valid_page_index(current_index: int, num_pages: int, anno: dict, retries: int=10):
+def get_next_valid_page_index(current_index: int, num_pages: int, anno: dict, retries: int = 10):
     """
     Get the index of the next valid page which contains text. If it doesn't find any non empty page
     after 'retries' attempts, it raises a RuntimeError.
@@ -124,8 +128,9 @@ def get_next_valid_page_index(current_index: int, num_pages: int, anno: dict, re
     int: The index of the next non empty page.
     """
     for _ in range(retries):
-        current_index = (current_index + 1) % num_pages  # Get the next index, wrap around to 0 if it exceeds num_pages (in case of random init)
-        anno_page = anno['pages'][current_index]
-        if anno_page['text']:
+        # Get the next index, wrap around to 0 if it exceeds num_pages (in case of random init)
+        current_index = (current_index + 1) % num_pages
+        anno_page = anno["pages"][current_index]
+        if anno_page["text"]:
             return current_index
     raise RuntimeError(f"No non-empty page found after {retries} attempts")

@@ -13,5 +13,4 @@ from .task_cruller_eval_rvlcdip import TaskCrullerEvalRVLCDIP, TaskCrullerEvalRV
 from .task_cruller_eval_cord import TaskCrullerEvalCORD, TaskCrullerEvalCORDCfg
 from .task_cruller_eval_docvqa import TaskCrullerEvalDOCVQA, TaskCrullerEvalDOCVQACfg
 
-
-from .task_factory import TaskFactory
+from .task_registry import get_train_task_from_cfg, get_train_task_cfgs, get_eval_task_from_cfg, get_eval_task_cfgs

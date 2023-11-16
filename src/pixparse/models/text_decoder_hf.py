@@ -5,35 +5,44 @@ import transformers
 from torch import nn as nn
 
 from pixparse.models.config import TextDecoderCfg
+from pixparse.layers import convert_bart_pp, resize_positional_embeddings
 
 
-def create_text_decoder(cfg: TextDecoderCfg) -> transformers.BartForCausalLM:  # FIXME for type hints
+def _hf_text_decoder(cfg: TextDecoderCfg) -> transformers.BartForCausalLM:  # FIXME for type hints
     assert cfg.name
 
-    config = transformers.AutoConfig.from_pretrained(cfg.name)
-    config.add_cross_attention = True
-    if False:  # FIXME this were set in Donut but missed in first pass, should compare
-        config.is_encoder_decoder = False
-        config.scale_embedding = True
-        config.add_final_layer_norm = True
+    # FIXME support models outside of Bart
+
+    hf_config = transformers.AutoConfig.from_pretrained(cfg.name)
+    hf_config.is_decoder = True
+    hf_config.add_cross_attention = True
+    if True:  # FIXME these were set in Donut but missed in first pass, should compare
+        hf_config.is_encoder_decoder = False
+        hf_config.scale_embedding = True
+        hf_config.add_final_layer_norm = True
     if cfg.num_decoder_layers is not None:
-        config.decoder_layers = cfg.num_decoder_layers
+        hf_config.decoder_layers = cfg.num_decoder_layers
     if cfg.max_length is not None:
-        config.max_position_embeddings = cfg.max_length
+        hf_config.max_position_embeddings = cfg.max_length
     #config.vocab_size =   # FIXME set vocab size here or rely on model resize when tokens added?
 
     if cfg.pretrained:
         model = transformers.AutoModelForCausalLM.from_pretrained(
             cfg.name,
-            config=config,
+            config=hf_config,
         )
     else:
         model = transformers.AutoModelForCausalLM.from_config(
-            config,
+            hf_config,
         )
+    model.config.is_encoder_decoder = True
+
+    model = convert_bart_pp(model, config=model.config, qk_norm_cross=cfg.qk_norm_cross)
+    # TODO Protect this resize behind a flag
+    model = resize_positional_embeddings(model, max_length=cfg.max_length)
+
     # TODO Following is the donut hack. Unused without generate().
     # model.model.decoder.embed_tokens.padding_idx = cfg.pad_token_id
-
     return model
 
 
@@ -41,7 +50,7 @@ class TextDecoderHf(nn.Module):
 
     def __init__(self, cfg: TextDecoderCfg):
         super().__init__()
-        self.trunk = create_text_decoder(cfg)
+        self.trunk = _hf_text_decoder(cfg)
         self.prepare_inputs_for_generation = self.prepare_inputs_for_inference
 
     def prepare_inputs_for_inference(
@@ -76,6 +85,28 @@ class TextDecoderHf(nn.Module):
             "encoder_hidden_states": encoder_outputs #.last_hidden_state, #FIXME for timm ViT encoder there is no last hidden state
         }
         return output
+
+    @torch.jit.ignore
+    def set_grad_checkpointing(self, enable=True):
+        if enable:
+            self.trunk.gradient_checkpointing_enable()
+        else:
+            self.trunk.gradient_checkpointing_disable()
+
+    @torch.jit.ignore
+    def no_weight_decay(self):
+        look_for = ('embed_positions', 'embed_tokens')
+        return {n for n, _ in self.named_parameters() if any([l in n for l in look_for])}
+
+    @torch.jit.ignore
+    def get_wrap_layers(self):
+        # FIXME make more generic
+        if isinstance(self.trunk, transformers.models.bart.BartForCausalLM):
+            from transformers.models.bart.modeling_bart import BartDecoderLayer
+            from pixparse.layers.bart import PixParseBartDecoderLayer
+            return {BartDecoderLayer, PixParseBartDecoderLayer}
+        else:
+            assert False
 
     def forward(
             self,
