@@ -324,7 +324,6 @@ def _resize_embeddings(weight: torch.Tensor, max_length: int) -> torch.Tensor:
     """
     Helper method to resize embeddings tensor.
     """
-    print(weight.shape)
     if weight.size(0) > max_length:
         # Truncate the positional embeddings if necessary
         resized_weight = weight[:max_length, :]
@@ -336,8 +335,6 @@ def _resize_embeddings(weight: torch.Tensor, max_length: int) -> torch.Tensor:
             mode='linear',
             align_corners=False
         ).squeeze(0).permute(1, 0)
-    print(resized_weight.shape)
-
     return resized_weight
 
 

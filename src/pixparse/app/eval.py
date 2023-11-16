@@ -20,7 +20,7 @@ from pixparse.framework import (
     setup_logging,
     random_seed,
 )
-from pixparse.utils.s3_utils import load_checkpoint_from_s3
+from pixparse.utils import get_selected_non_default_args
 from pixparse.task import get_eval_task_from_cfg, get_eval_task_cfgs
 
 from chug.webdataset import create_doc_anno_pipe, create_image_text_pipe
@@ -53,9 +53,8 @@ def eval(
     task: TaskEval,
     eval_loaders: dict,
 ):
+    
     device_env = task.device_env
-
-    # load wanted checkpoint
 
     metrics = evaluate(task, eval_loaders)
     # Do something with metrics, print them, log them, save them
@@ -101,10 +100,12 @@ def main():
         output_dir=eval_cfg.output_dir,
         output_enabled=device_env.is_primary(),
     )
+    selected_args = ['task', 'checkpoint_path']
+    rename_map = {'task': 'cfg'}
+    selected_non_default_args = get_selected_non_default_args(eval_cfg, selected_args, rename_map)
 
     task = task_cls(
-        eval_cfg.task,
-        eval_cfg.checkpoint_path,
+        **selected_non_default_args,
         device_env=device_env,
         monitor=monitor,
     )
