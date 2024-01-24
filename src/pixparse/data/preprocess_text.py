@@ -78,8 +78,15 @@ def preprocess_ocr_anno(
     # FIXME for initial behaviour we will randomly sample one of N pages
     # TODO determine if we want to train in multi-page mode, use another sampling strategy?
     current_index = generator.randint(0, num_pages - 1)
-    if not anno["pages"][current_index]["text"]:
-        current_index = get_next_valid_page_index(current_index, num_pages, anno)
+    if "text" in anno["pages"][current_index]:
+        # For PDFA, there are two levels before getting the data. 
+        # For IDL the key "text" is enough   
+        if not anno["pages"][current_index]["text"]:
+            current_index = get_next_valid_page_index(current_index, num_pages, anno)
+    elif "lines" in anno["pages"][current_index]:
+        # this handles the PDFA case.
+        if not anno["pages"][current_index]["lines"]["text"]:
+            current_index = get_next_valid_page_index(current_index, num_pages, anno)
 
     page_indices = []
     text_pages = []
@@ -88,11 +95,18 @@ def preprocess_ocr_anno(
     while len(text_pages) < n_wanted_pages:
         # FIXME treating pages separately, this best approach or tokenize w/ page-break?
         anno_page = anno["pages"][current_index]
-        if not anno_page["text"]:
-            raise RuntimeError("No text on page, skipping...")
+        if "text" in anno_page:
+            if not anno_page["text"]:
+                raise RuntimeError("No text on page, skipping...")
+        elif "lines" in anno_page:
+            if not anno_page["lines"]["text"]:
+                raise RuntimeError("No text on page, skipping...")
         # FIXME see self.donut_model.json2token, task specific json tokenization for
         #  the non-pretrain tasks varies w/ differing special tokens and prompts
-        text = "\n".join(anno_page["text"])
+        if "lines" in anno_page:
+            text = "\n".join(anno_page['lines']["text"])
+        elif "text" in anno_page:
+            text = "\n".join(anno_page["text"])
         orig_text = text
         text = task_start_token + text + tokenizer.eos_token
         text = tokenize(tokenizer, text, max_position_embeddings)
@@ -131,6 +145,10 @@ def get_next_valid_page_index(current_index: int, num_pages: int, anno: dict, re
         # Get the next index, wrap around to 0 if it exceeds num_pages (in case of random init)
         current_index = (current_index + 1) % num_pages
         anno_page = anno["pages"][current_index]
-        if anno_page["text"]:
-            return current_index
+        if "text" in anno_page:
+            if anno_page["text"]:
+                return current_index
+        elif "words" in anno_page and "lines" in anno_page:
+            if anno_page["lines"]["text"]:
+                return current_index
     raise RuntimeError(f"No non-empty page found after {retries} attempts")
