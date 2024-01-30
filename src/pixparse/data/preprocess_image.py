@@ -229,7 +229,6 @@ def nougat_transforms(
     alb_pp = []
 
     if grayscale:
-        print('DEBUG Converting to grayscale')
         tv_pp += [transforms.Grayscale()]
 
     if crop_margin:
