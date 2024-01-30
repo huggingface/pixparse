@@ -1,0 +1,18 @@
+{
+    "image_encoder": {
+        "name": "swin_base_patch4_window12_384.ms_in22k",
+        "image_fmt": "L",
+        "image_size": [
+            1280,
+            960
+        ],
+        "patch_size": 8,
+        "window_size": 16
+    },
+    "text_decoder": {
+        "name": "facebook/bart-large",
+        "num_decoder_layers": 6,
+        "max_length": 1024,
+        "pad_token_id": null
+    }
+}
