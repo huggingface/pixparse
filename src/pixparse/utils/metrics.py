@@ -19,7 +19,7 @@ def similarity_score(a_ij, o_q_i, tau=0.5):
 def average_normalized_levenshtein_similarity(ground_truth, predicted_answers):
     assert len(ground_truth) == len(predicted_answers), "Length of ground_truth and predicted_answers must match."
 
-    N = len(ground_truth)  
+    N = len(ground_truth)
     total_score = 0
 
     for i in range(N):

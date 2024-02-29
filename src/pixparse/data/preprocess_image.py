@@ -214,6 +214,7 @@ def nougat_transforms(
         interpolation='bicubic',
         fill=255,
         crop_margin=False,
+        grayscale=True,
 ):
     assert has_albumentations, 'Albumentations and CV2 needed to use nougat transforms.'
 
@@ -226,6 +227,10 @@ def nougat_transforms(
 
     tv_pp = []
     alb_pp = []
+
+    if grayscale:
+        tv_pp += [transforms.Grayscale()]
+
     if crop_margin:
         tv_pp += [CropMargin()]
     if align_long_axis:

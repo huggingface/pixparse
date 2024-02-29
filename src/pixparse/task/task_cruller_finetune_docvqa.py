@@ -21,7 +21,8 @@ from pixparse.models import Cruller, create_model, resize_model_embeddings, Mode
 from pixparse.tokenizers import TokenizerCfg, create_tokenizer
 from pixparse.utils.json_utils import json2token, token2json, JSONParseEvaluator  # assuming you need all three
 from pixparse.utils import load_checkpoint, get_latest_checkpoint
-
+from PIL import Image
+import io
 _logger = logging.getLogger(__name__)
 
 
@@ -55,11 +56,18 @@ class CollateDocVQA(BaseCollate):
         self.end_token = end_token
 
     def __call__(self, batch):
-        images = [item["image"] for item in batch]
+        images = [Image.open(io.BytesIO(item["image"]['bytes'])) for item in batch]
         # question/answer tokens are already present in the data
-        q_and_as = [np.random.choice(item['labels']) for item in batch]  # TODO allow to change strategy here
+        
+        
+        questions = [item["question"] for item in batch] # list of questions
+        answers = [np.random.choice(item["answers"]) for item in batch] # select one answer per question
+        questions_and_answers = []
+        for question, answer in zip(questions, answers):
+            questions_and_answers.append("<s_question>" + question + "</s_question><s_answer>" + answer + "</s_answer>")
+
         labels_tokens = []
-        for text in q_and_as:
+        for text in questions_and_answers:
             labels_tokens.append(self.tokenizer_fn(self.start_token + text + self.tokenizer.eos_token))
         return self.pack_inputs(images, labels_tokens)
 
@@ -123,7 +131,6 @@ class TaskCrullerFinetuneDOCVQA(TaskTrain):
             pretrained=checkpoint_path, 
             new_vocab_size=len(self.tokenizer)
         )
-
         finetuning_special_tokens = [
             self.task_start_token,  # task start (based on dataset/task)
             self.prompt_end_token,  # prompt end (or task_start for pretrain)
@@ -168,15 +175,16 @@ class TaskCrullerFinetuneDOCVQA(TaskTrain):
             max_length=128  # FIXME derive from config
         )
 
-    def setup(self, num_batches_per_interval: int, resume: str):
+    def setup(self, num_batches_per_interval: int, resume: str=""):
         """
         Overrides the setup method to add additional setup steps specific to TaskCrullerFinetuneDOCVQA.
         The additional setup step is adding finetuning tokens.
 
         Args:
             num_batches_per_interval: Number of batches per interval.
-            resume: Flag indicating whether to resume from a checkpoint.
+            resume: Flag indicating whether to resume from a checkpoint, if present, its path or "latest".
         """
+
         if resume:
             if resume == "latest":
                 resume = get_latest_checkpoint(resume)
