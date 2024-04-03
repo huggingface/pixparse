@@ -47,7 +47,7 @@ class TaskTrainCfg(TaskCfg):
     tokenizer: Optional[TokenizerCfg] = None
     image_transforms: str = "nougat"  # Can be "better", "nougat" or ""
     num_intervals: int = 100
-    num_warmup_intervals: int = 5
+    num_warmup_intervals: float = 5.0 # int = 5
     log_frequency: int = 100  # log every n steps
     metrics_frequency: int = 1000  # calculate train metrics every n steps
     eval_frequency: Optional[int] = None  # FIXME needs redefinition

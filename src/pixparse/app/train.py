@@ -56,14 +56,17 @@ def train(
         train_one_interval(
             task,
             train_loader,
+            cfg,
+            interval=i
         )
 
         # save checkpoint
         if device_env.is_primary():
             checkpoint_dir = os.path.join(cfg.output_checkpoint_dir, cfg.experiment)
             os.makedirs(checkpoint_dir, exist_ok=True)
+            #if i in [1, 5, 10, 20, 29, 40, 70, 99, 120, 150, 170, 199, 220, 250, 270, 299]:
             torch.save(task.state_dict(), os.path.join(checkpoint_dir, f'checkpoint-{i}.pt'))
-
+        
 """
 def load_checkpoint_cases(train_cfg, task):
     # ----- Model resuming from checkpoint (non-fsdp) -----
@@ -126,6 +129,7 @@ def main():
             f"model_{model_name_safe}",
             f"lr_{'{:.1e}'.format(train_cfg.task.opt.learning_rate)}",
             f"b_{train_cfg.train_data.batch_size}",
+            f"intervals_{train_cfg.task.num_intervals}",
             # TODO make completion of exp name derived from essential hparams
         ])
         train_cfg = replace(train_cfg, experiment=experiment)
@@ -160,7 +164,6 @@ def main():
         **selected_non_default_args,
         device_env=device_env,
         monitor=monitor,
-
     )
 
     # FIXME Move this functionality to task_cls instance init so that all weight init is in init

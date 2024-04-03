@@ -52,6 +52,8 @@ def create_transforms(
         return nougat_transforms(**basic_args, **adv_args)
     elif name == 'basic':
         return basic_transforms(**basic_args, **adv_args)
+    elif name == 'noaugments':
+        return no_aug_transforms(**basic_args, **adv_args)
     else:
         return legacy_transforms(**basic_args)
 
@@ -74,6 +76,24 @@ def legacy_transforms(
     ])
     return pp
 
+def no_aug_transforms(
+        input_cfg: ImageInputCfg, 
+        training=True,
+        grayscale=True, 
+        fill=255,
+        **kwargs,
+        ):
+    pp = []
+    if grayscale:
+        pp += [transforms.Grayscale()]
+    
+    pp += [
+        CenterCropOrPad(input_cfg.image_size, fill=fill),
+        transforms.ToTensor(),
+        transforms.Normalize(input_cfg.image_mean, input_cfg.image_std),
+    ]
+
+    return transforms.Compose(pp)
 
 def basic_transforms(
         input_cfg: ImageInputCfg,
@@ -82,12 +102,15 @@ def basic_transforms(
         crop_margin=False,
         align_long_axis=False,
         fill=255,
+        grayscale=True,
 ):
     # an improved torchvision + custom op transforms (no albumentations)
     image_size = input_cfg.image_size
     interpolation_mode = timm.data.transforms.str_to_interp_mode(interpolation)
 
     pp = []
+    if grayscale:
+        pp += [transforms.Grayscale()]
     if crop_margin:
         assert has_cv2, 'CV2 needed to use crop margin.'
         pp += [CropMargin()]
