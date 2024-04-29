@@ -59,7 +59,7 @@ class SmallEval:
         newly_added_num = self.tokenizer.add_special_tokens(
             {"additional_special_tokens": sorted(set(special_tokens))}
         )
-        self.model = create_model(self.cfg, new_vocab_size=len(self.tokenizer), pretrained=checkpoint_path)
+        self.model = create_model(self.cfg, pretrained=checkpoint_path)
         self.model.eval().to(device_env.device)
         self.img_mean = self.model.image_encoder.trunk.pretrained_cfg["mean"]
         self.img_std = self.model.image_encoder.trunk.pretrained_cfg["std"]
