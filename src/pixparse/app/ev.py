@@ -59,7 +59,7 @@ class SmallEval:
         newly_added_num = self.tokenizer.add_special_tokens(
             {"additional_special_tokens": sorted(set(special_tokens))}
         )
-        self.model = create_model(self.cfg, pretrained=checkpoint_path)
+        self.model = create_model(self.cfg, new_vocab_size=len(self.tokenizer), pretrained=checkpoint_path)
         self.model.eval().to(device_env.device)
         self.img_mean = self.model.image_encoder.trunk.pretrained_cfg["mean"]
         self.img_std = self.model.image_encoder.trunk.pretrained_cfg["std"]
@@ -100,16 +100,13 @@ class SmallEval:
                 image_output = self.prepare_image_output(image[0].unsqueeze(0))
             preds = self.get_preds(image_output)
             decoded_texts = self.tokenizer.batch_decode(preds, skip_special_tokens=True)
-            #decoded_text = ' '.join(decoded_texts)
 
-            #orig_text_transformed = wer_transform(orig_text[0])
-            #decoded_text_transformed = wer_transform(decoded_text)
             ocr_predictions = [re.sub(r"<.*?>", "", re.sub("\n", " ", text)) for text in decoded_texts]
             orig_texts = [re.sub(r"<.*?>", "", re.sub("\n", " ", text)) for text in orig_text]
             wer_score = jiwer.wer(orig_texts, ocr_predictions)
             cer_score = jiwer.cer(orig_texts, ocr_predictions)
-            #orig_text_transformed = cer_transform(orig_text[0])
-            #decoded_text_transformed = cer_transform(decoded_text)
+            #print forst 50 characters of the original text and predicted text
+            print(f'Original: {orig_texts[0][:50]}, Predicted: {ocr_predictions[0][:50]}, WER: {wer_score:.2f}, CER: {cer_score:.2f}')
 
             wer_sum += wer_score
             cer_sum += cer_score
@@ -128,10 +125,11 @@ cfg_path =  '/fsx/dana_aubakirova/pixparse/src/pixparse/models/configs/cruller_v
 #checkpoint_path = '/fsx/dana_aubakirova/pixparse-exps/20240422-140801-task_cruller_pretrain-model_cruller_vitL384_qk_siglip-lr_3.0e-05-b_36-intervals_90/checkpoints/20240422-140801-task_cruller_pretrain-model_cruller_vitL384_qk_siglip-lr_3.0e-05-b_36-intervals_90/checkpoint-29.pt'
 #checkpoint_path = '/fsx/dana_aubakirova/pixparse-exps/20240425-124126-task_cruller_pretrain-model_cruller_vitL384_qk_siglip-lr_3.0e-05-b_36-intervals_30/checkpoints/20240425-124126-task_cruller_pretrain-model_cruller_vitL384_qk_siglip-lr_3.0e-05-b_36-intervals_30/checkpoint-29.pt'
 #chkpt1 = '/fsx/dana_aubakirova/pixparse-exps/20240427-160315-task_cruller_pretrain-model_cruller_vitL384_qk_siglip-lr_3.0e-05-b_36-intervals_90/checkpoints/20240427-160315-task_cruller_pretrain-model_cruller_vitL384_qk_siglip-lr_3.0e-05-b_36-intervals_90/checkpoint-9.pt'
-#chkpt2 = '/fsx/dana_aubakirova/pixparse-exps/20240427-162933-task_cruller_pretrain-model_cruller_vitL384_qk_siglip-lr_3.0e-05-b_36-intervals_90/checkpoints/20240427-162933-task_cruller_pretrain-model_cruller_vitL384_qk_siglip-lr_3.0e-05-b_36-intervals_90/checkpoint-89.pt'
-chkpt3 = '/fsx/dana_aubakirova/pixparse-exps/20240426-161012-task_cruller_pretrain-model_cruller_vitL384_qk_siglip-lr_3.0e-05-b_36-intervals_60/checkpoints/20240426-161012-task_cruller_pretrain-model_cruller_vitL384_qk_siglip-lr_3.0e-05-b_36-intervals_60/checkpoint-49.pt'
+chkpt2 = '/fsx/dana_aubakirova/pixparse-exps/20240427-162933-task_cruller_pretrain-model_cruller_vitL384_qk_siglip-lr_3.0e-05-b_36-intervals_90/checkpoints/20240427-162933-task_cruller_pretrain-model_cruller_vitL384_qk_siglip-lr_3.0e-05-b_36-intervals_90/checkpoint-89.pt'
+#chkpt3 = '/fsx/dana_aubakirova/pixparse-exps/20240426-161012-task_cruller_pretrain-model_cruller_vitL384_qk_siglip-lr_3.0e-05-b_36-intervals_60/checkpoints/20240426-161012-task_cruller_pretrain-model_cruller_vitL384_qk_siglip-lr_3.0e-05-b_36-intervals_60/checkpoint-49.pt'
+chkpt4 = '/fsx/pablo/pixparse-exps/20240222-180503-task_cruller_pretrain-model_cruller_vitL384_qk_siglip-lr_3.0e-05-b_36/checkpoints/20240222-180503-task_cruller_pretrain-model_cruller_vitL384_qk_siglip-lr_3.0e-05-b_36/checkpoint-2.pt'
 folder_path = '/fsx/dana_aubakirova/FUNSD-000000/'
 device_env = DeviceEnv()
 
-evaluator = SmallEval(cfg_path, chkpt3, device_env)
+evaluator = SmallEval(cfg_path, chkpt4, device_env)
 evaluator.evaluate(folder_path)
