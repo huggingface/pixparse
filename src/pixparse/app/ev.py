@@ -82,7 +82,7 @@ class SmallEval:
         return self.model.text_decoder.trunk.generate(input_ids=input_ids, encoder_outputs=image_output, pad_token_id=1, max_new_tokens=512)
 
     def evaluate(self, folder_path):
-        dataset = ImageTextDataset(folder_path,self.img_mean,self.img_mean)
+        dataset = ImageTextDataset(folder_path, self.img_mean, self.img_std)
         wer_sum, cer_sum, count = 0, 0, 0
         cer_transform = jiwer.transforms.Compose([
             jiwer.transforms.RemoveMultipleSpaces(),
