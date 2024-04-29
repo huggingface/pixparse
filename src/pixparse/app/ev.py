@@ -96,7 +96,8 @@ class SmallEval:
         ])
         
         for image, orig_text in DataLoader(dataset, batch_size=1):
-            image_output = self.prepare_image_output(image[0].unsqueeze(0))
+            with torch.inference_mode():
+                image_output = self.prepare_image_output(image[0].unsqueeze(0))
             preds = self.get_preds(image_output)
             decoded_texts = self.tokenizer.batch_decode(preds, skip_special_tokens=True)
             #decoded_text = ' '.join(decoded_texts)
