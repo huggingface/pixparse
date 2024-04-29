@@ -36,7 +36,7 @@ class EvalCfg(Serializable):
 
     experiment: str = ""
     output_dir: str = "./output"
-    log_filename: str = "out.log"
+    log_filename: str = "out_new.log"
     dataset_name: str = ""
     s3_bucket: str = ""
     checkpoint_path: str = ""

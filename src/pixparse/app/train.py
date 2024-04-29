@@ -64,8 +64,8 @@ def train(
         if device_env.is_primary():
             checkpoint_dir = os.path.join(cfg.output_checkpoint_dir, cfg.experiment)
             os.makedirs(checkpoint_dir, exist_ok=True)
-            #if i in [1, 5, 10, 20, 29, 40, 70, 99, 120, 150, 170, 199, 220, 250, 270, 299]:
-            torch.save(task.state_dict(), os.path.join(checkpoint_dir, f'checkpoint-{i}.pt'))
+            if i in [1, 9, 29, 39, 40, 49, 59, 69, 79, 89]:
+                torch.save(task.state_dict(), os.path.join(checkpoint_dir, f'checkpoint-{i}.pt'))
         
 """
 def load_checkpoint_cases(train_cfg, task):
