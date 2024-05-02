@@ -56,9 +56,9 @@ class CollateDocVQA(BaseCollate):
         self.end_token = end_token
 
     def __call__(self, batch):
-        images = [Image.open(io.BytesIO(item["image"]['bytes'])) for item in batch]
+        #images = [Image.open(io.BytesIO(item["image"]['bytes'])) for item in batch]
+        images = [item["image"] for item in batch]
         # question/answer tokens are already present in the data
-        
         
         questions = [item["question"] for item in batch] # list of questions
         answers = [np.random.choice(item["answers"]) for item in batch] # select one answer per question
