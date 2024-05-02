@@ -64,7 +64,7 @@ class BaseCollate:
             `dict`:
                 A dictionary containing processed images, labels, and text targets.
         """
-        images = torch.stack([self.image_preprocess(img) for img in images])
+        images = torch.stack([self.image_preprocess(img.convert("L")) for img in images])
         labels = torch.stack(labels_tokens)
         targets = torch.stack(
             [
@@ -159,7 +159,7 @@ def create_loader(
         # In the case of hf datasets, we use the collator defined at task level
         if cfg.source == "SinglePageDocVQA":
             dataset = CustomVQADataset(
-                root_dir=f"/fsx/pablo/.cache/{cfg.source}",  # FIXME hacky hack
+                root_dir=f"/fsx/dana_aubakirova/{cfg.source}",  # FIXME hacky hack
                 split=cfg.split,
             )
         else:
