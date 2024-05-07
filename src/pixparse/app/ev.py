@@ -79,7 +79,7 @@ class SmallEval:
 
     def get_preds(self, image_output):
         input_ids = torch.tensor(self.tokenizer.encode("<s_pretrain>", add_special_tokens=False)).unsqueeze(0).to(self.device_env.device)
-        return self.model.text_decoder.trunk.generate(input_ids=input_ids, encoder_outputs=image_output, pad_token_id=1, max_new_tokens=512)
+        return self.model.text_decoder.trunk.generate(input_ids=input_ids, encoder_outputs=image_output, pad_token_id=1, max_new_tokens=2048, num_beams=1, do_sample=False)
 
     def evaluate(self, folder_path):
         dataset = ImageTextDataset(folder_path, self.img_mean, self.img_std)
