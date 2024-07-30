@@ -14,7 +14,7 @@ from torchvision import transforms
 from pixparse.data import preprocess_ocr_anno, preprocess_text_anno
 from pixparse.framework import (DeviceEnv, Monitor, TaskEval, TaskEvalCfg)
 from pixparse.models import Cruller, ModelCfg, get_model_config
-from pixparse.tokenizers import TokenizerCfg, TokenizerHF
+from pixparse.tokenizers import TokenizerCfg, create_tokenizer
 from pixparse.utils.json_utils import json2token, token2json
 from pixparse.utils.json_utils import JSONParseEvaluator
 
@@ -27,28 +27,10 @@ _logger = logging.getLogger(__name__)
 
 @dataclass
 class TaskCrullerEvalCORDCfg(TaskEvalCfg):
-    model_name: Optional[
-        str
-    ] = None  # if model_name set, loads a pre-defined config in models/configs
-    model: ModelCfg = field(
-        default_factory=ModelCfg
-    )  # FIXME rename model_cfg to diff from model_name?
+    model_name: Optional[str] = None  # if model_name set, loads a pre-defined config in models/configs
+    model: ModelCfg = field(default_factory=ModelCfg) # FIXME
     tokenizer: TokenizerCfg = field(default_factory=TokenizerCfg)
 
-    def __post_init__(self):
-        # FIXME figure out how to get command line args to overlay on top pre-defined
-        # config but ONLY if they are specified on cmd line?
-        if self.model_name:
-            model = get_model_config(self.model_name)
-            if model is None:
-                _logger.warning(
-                    f"Model config for {self.model_name} was not found, using defaults."
-                )
-
-            else:
-                self.model = model
-        else:
-            self.model_name = "custom"
 
 class TaskCrullerEvalCORD(TaskEval):
     """Simple task to evaluate donut on FUNSD data and get metrics in similar format as Cruller."""
@@ -76,7 +58,7 @@ class TaskCrullerEvalCORD(TaskEval):
         self.prompt_end_token = self.task_start_token
         self.max_position_embeddings = cfg.model.text_decoder.max_length
         self.text_anno_fn = True  # set for image-text dataset experiments
-        self.tokenizer = TokenizerHF(cfg.tokenizer)
+        self.tokenizer = create_tokenizer(cfg.tokenizer)
 
         self.state_dict = OrderedDict()
         self.resume = False
@@ -146,14 +128,10 @@ class TaskCrullerEvalCORD(TaskEval):
             "<s_pretrain>",  # task start (based on dataset/task)
         ]
 
-
-
-
-
         preproc_fn = preprocess_text_anno if self.text_anno_fn else preprocess_ocr_anno
         self.anno_preprocess_eval = partial(
             preproc_fn,
-            tokenizer=self.tokenizer.trunk,
+            tokenizer=self.tokenizer,
             max_position_embeddings=self.max_position_embeddings,
             task_start_token=self.task_start_token,
             prompt_end_token=self.prompt_end_token,
@@ -163,31 +141,28 @@ class TaskCrullerEvalCORD(TaskEval):
 
         # ---- Add pretraining tokens
 
-        newly_added_num_from_pretrain = self.tokenizer.trunk.add_special_tokens(
+        newly_added_num_from_pretrain = self.tokenizer.add_special_tokens(
             {"additional_special_tokens": sorted(set(special_tokens_from_pretrain))}
         )
-
 
         # need to resize embeddings from pretrained model in order to load it
         if newly_added_num_from_pretrain > 0:
             self.model.text_decoder.trunk.resize_token_embeddings(
-                len(self.tokenizer.trunk)
+                len(self.tokenizer)
             )
 
         # ---- Add finetuning tokens
-
-        newly_added_num = self.tokenizer.trunk.add_special_tokens(
+        newly_added_num = self.tokenizer.add_special_tokens(
             {"additional_special_tokens": sorted(set(cord_finetune_tokens))}
         )
-        self.vocab_size = len(self.tokenizer.trunk)
+        self.vocab_size = len(self.tokenizer)
 
         # We resize token embeddings after initializing
         if newly_added_num > 0:
             self.model.text_decoder.trunk.resize_token_embeddings(
-                len(self.tokenizer.trunk)
+                len(self.tokenizer)
             )
 
-# ------ 
         self.loss = nn.CrossEntropyLoss(ignore_index=-100)
         self.has_no_sync = False
         self.num_image_chs = 1 if cfg.model.image_encoder.image_fmt == "L" else 3
@@ -226,6 +201,7 @@ class TaskCrullerEvalCORD(TaskEval):
                 ),
             ]
         )
+
     def setup(self):
         device = self.device_env.device
         self.model.load_state_dict(self.resume_state_dict)
@@ -236,7 +212,6 @@ class TaskCrullerEvalCORD(TaskEval):
         self.acc_list = []
 
         self.evaluator = JSONParseEvaluator()
-
 
     def prepare_inputs_for_inference(
         self,
@@ -249,7 +224,7 @@ class TaskCrullerEvalCORD(TaskEval):
     ):
         if past is not None:
             past_key_values = past
-        attention_mask = input_ids.ne(self.tokenizer.trunk.pad_token_id).long()
+        attention_mask = input_ids.ne(self.tokenizer.pad_token_id).long()
         if past_key_values is not None:
             input_ids = input_ids[:, -1:]
         output = {
@@ -271,7 +246,6 @@ class TaskCrullerEvalCORD(TaskEval):
         return loaders
         # return loaders_and_tasks
 
-
     def safe_image_transform(self, img):
         try:
             transformed_img = self.image_preprocess_eval(img)
@@ -283,9 +257,9 @@ class TaskCrullerEvalCORD(TaskEval):
     def text_input_to_target(self, text_input, ignore_id=-100):
         target = text_input.clone()
         # model doesn't need to predict pad token
-        target[target == self.tokenizer.trunk.pad_token_id] = ignore_id
+        target[target == self.tokenizer.pad_token_id] = ignore_id
         # model doesn't need to predict prompt (for VQA)
-        prompt_end_token_id = self.tokenizer.trunk.convert_tokens_to_ids(
+        prompt_end_token_id = self.tokenizer.convert_tokens_to_ids(
             self.prompt_end_token
         )
         slice_id = torch.nonzero(target == prompt_end_token_id).sum() + 1
@@ -298,7 +272,7 @@ class TaskCrullerEvalCORD(TaskEval):
         """
 
         # TODO move this to a __getitem__ for pickling
-        tokenizer_fn = lambda x: self.tokenizer.trunk(
+        tokenizer_fn = lambda x: self.tokenizer(
             x,
             add_special_tokens=False,
             return_tensors="pt",
@@ -311,12 +285,12 @@ class TaskCrullerEvalCORD(TaskEval):
         raw_texts = [literal_eval(item["ground_truth"])["gt_parse"] for item in batch]
         inputs_to_stack = []
         for text in raw_texts:
-            tokens_from_json, _ = json2token(text, self.tokenizer.trunk.all_special_tokens, sort_json_key=False)
+            tokens_from_json, _ = json2token(text, self.tokenizer.all_special_tokens, sort_json_key=False)
             inputs_to_stack.append(tokenizer_fn(
                 self.task_start_token
-                #+ self.tokenizer.trunk.bos_token
+                #+ self.tokenizer.bos_token
                 + tokens_from_json
-                + self.tokenizer.trunk.eos_token
+                + self.tokenizer.eos_token
             ))
         text_inputs = torch.stack(
             inputs_to_stack
@@ -340,7 +314,7 @@ class TaskCrullerEvalCORD(TaskEval):
         """
         metrics = {}
         for image, label in zip(batch["image"], batch['label']):
-            decoded_gt = self.tokenizer.trunk.decode(label)
+            decoded_gt = self.tokenizer.decode(label)
             ground_truth = token2json(decoded_gt)
             with torch.inference_mode():
                 tensor_image = image.unsqueeze(0).to(self.device_env.device)  # Adding an extra dimension for batch
@@ -348,7 +322,7 @@ class TaskCrullerEvalCORD(TaskEval):
                 
                 current_string = "<s_cord>"
 
-                input_ids = torch.tensor(self.tokenizer.trunk.encode("<s_cord>", add_special_tokens=False)).unsqueeze(0).to(self.device_env.device)  # Adding extra dimension for batch
+                input_ids = torch.tensor(self.tokenizer.encode("<s_cord>", add_special_tokens=False)).unsqueeze(0).to(self.device_env.device)  # Adding extra dimension for batch
                 max_steps = 512  # maximum number of steps
 
                 for step in range(max_steps):
@@ -359,13 +333,13 @@ class TaskCrullerEvalCORD(TaskEval):
                     probabilities = F.softmax(decoder_outputs['logits'], dim=-1)
                     next_token_id = torch.argmax(probabilities[0, -1]).item()  # Just get the last token for the single sample
                     
-                    next_token = self.tokenizer.trunk.decode([next_token_id])
+                    next_token = self.tokenizer.decode([next_token_id])
                     current_string += next_token
 
                     if next_token == "</s>":
                         break
 
-                    input_ids = torch.tensor(self.tokenizer.trunk.encode(current_string, add_special_tokens=False)).unsqueeze(0).to(self.device_env.device)
+                    input_ids = torch.tensor(self.tokenizer.encode(current_string, add_special_tokens=False)).unsqueeze(0).to(self.device_env.device)
 
                 predicted_json = token2json(current_string)
             self.all_predictions.append(predicted_json)

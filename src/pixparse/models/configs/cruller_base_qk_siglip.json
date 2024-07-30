@@ -1,0 +1,18 @@
+{
+    "image_encoder": {
+        "name": "vit_base_patch16_siglip_512",
+        "head_type": "linear",
+        "image_fmt": "L",
+        "image_size": [
+            1280,
+            960
+        ]
+    },
+    "text_decoder": {
+        "name": "facebook/bart-base",
+        "num_decoder_layers": 4,
+        "max_length": 1024,
+        "qk_norm_cross": true,
+        "pad_token_id": null
+    }
+}

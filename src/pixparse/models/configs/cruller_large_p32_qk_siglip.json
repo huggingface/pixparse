@@ -1,0 +1,20 @@
+{
+    "image_encoder": {
+        "name": "vit_large_patch16_siglip_384",
+        "head_type": "linear",
+        "patch_size": 32,
+        "image_fmt": "L",
+        "image_size": [
+            1920,
+            1408
+        ]
+    },
+    "text_decoder": {
+        "name": "facebook/bart-large",
+        "num_decoder_layers": 8,
+        "max_length": 1024,
+        "qk_norm_cross": true,
+        "pad_token_id": null
+    }
+}
+

@@ -11,10 +11,12 @@ from pixparse.utils.name_utils import _natural_key, clean_name
 _TOKENIZER_CONFIG_PATHS = [Path(__file__).parent / f"configs/"]
 _TOKENIZER_CONFIGS = {}  # model_name: config
 
+
 @dataclass
 class TokenizerCfg(Serializable):
     name: str = 'facebook/bart-large'
     pretrained: bool = True
+
 
 def _scan_tokenizer_configs():
     global _TOKENIZER_CONFIGS

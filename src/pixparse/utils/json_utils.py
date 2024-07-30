@@ -39,7 +39,7 @@ def json2token(
                 )
                 output += rf"<s_{k}>" + jsonentry + rf"</s_{k}>"
                 # self.model.text_decoder.trunk.resize_token_embeddings(
-                #    len(self.tokenizer.trunk)
+                #    len(self.tokenizer)
                 #    )
             return output, list(set(additional_special_tokens))
     elif type(obj) == list:

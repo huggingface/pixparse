@@ -1,8 +1,9 @@
 import copy
+import logging
 import re
 from pathlib import Path
-from dataclasses import dataclass, field
-from typing import Optional, Tuple
+from dataclasses import dataclass, field, replace
+from typing import ClassVar, Optional, Union, Tuple
 
 from simple_parsing.helpers import Serializable
 
@@ -12,11 +13,24 @@ _MODEL_CONFIG_PATHS = [Path(__file__).parent / f"configs/"]
 _MODEL_CONFIGS = {}  # model_name: config
 
 
+_logger = logging.getLogger(__name__)
+
+
 @dataclass
 class ImageEncoderCfg(Serializable):
     name: str = 'vit_base_patch16_224'
+    timm_out_dim: Optional[int] = None  # set final head dim in timm (can use as alternative to external head)
+    pool_type: Optional[str] = None  # output pooling type
+    head_type: Optional[str] = None  # output head (projection) type ('linear', 'mlp')
+    out_dim: Optional[int] = None  # enforce different output dim for head (must be enabled)
+    patch_size: Optional[Union[int, Tuple[int, int]]] = None
+    window_size: Optional[Union[int, Tuple[int, int]]] = None
     image_fmt: str = 'L'
     image_size: Optional[Tuple[int, int]] = (576, 448)
+    needs_image_size: bool = True  # model needs static image size on creation (vit, swin, etc)
+    drop_rate: Optional[float] = None
+    drop_path_rate: Optional[float] = None
+    patch_drop_rate: Optional[float] = None
     pretrained: bool = True
 
 
@@ -26,12 +40,47 @@ class TextDecoderCfg(Serializable):
     pretrained: bool = True
     num_decoder_layers: Optional[int] = 4
     max_length: Optional[int] = 1024
-    pad_token_id: Optional[int] = None # FIXME move this to TokenizerCfg?
+    qk_norm_cross: bool = False
+    pad_token_id: Optional[int] = None  # FIXME move this to TokenizerCfg?
+
 
 @dataclass
 class ModelCfg(Serializable):
+    type: str = 'cruller'
     image_encoder: ImageEncoderCfg = field(default_factory=ImageEncoderCfg)
     text_decoder: TextDecoderCfg = field(default_factory=TextDecoderCfg)
+
+
+# FIXME I'm not super happy about the cfg / args arrangement. Improves some issues, creates others -rwightman
+@dataclass
+class ModelArgs:
+    # specify a preset model configuration to load
+    name: str = ""
+
+    # common overrides
+    image_fmt: Optional[str] = None
+    image_size: Optional[Tuple[int, int]] = None
+    text_max_length: Optional[int] = None
+
+    # final, loaded & merged config
+    cfg: ModelCfg = field(init=False)  # FIXME better to move this into task directly?
+
+    def __post_init__(self):
+        model_cfg = get_model_config(self.name)
+        if model_cfg is None:
+            _logger.error(
+                f"Model config for {self.name} was not found."
+            )
+            raise RuntimeError(f"Model config for {self.name} was not found.")
+
+        if self.image_size is not None:
+            replace(model_cfg.image_encoder, image_size=self.image_size)
+        if self.image_fmt is not None:
+            replace(model_cfg.image_encoder, image_fmt=self.image_fmt)
+        if self.text_max_length is not None:
+            replace(model_cfg.text_decoder, max_length=self.text_max_length)
+
+        self.cfg = model_cfg
 
 
 def _scan_model_configs():

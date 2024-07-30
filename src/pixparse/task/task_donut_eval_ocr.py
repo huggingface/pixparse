@@ -24,6 +24,7 @@ class TaskDonutEvalOCRCfg(TaskEvalCfg):
     def __post_init__(self):
         pass
 
+
 class TaskDonutEvalOCR(TaskEval):
     """Simple task to evaluate donut on FUNSD data and get metrics in similar format as Cruller.
     """
@@ -85,7 +86,6 @@ class TaskDonutEvalOCR(TaskEval):
         self.eval_metrics = {}
         self.max_recursion_length = 1000  # specific to Cruller for generation
 
-    
     def setup(self):
         device = self.device_env.device
         self.model.to(device)

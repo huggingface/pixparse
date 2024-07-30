@@ -1,2 +1,2 @@
-from .tokenizer_hf import TokenizerHF
+from .tokenizer_hf import create_tokenizer
 from .config import TokenizerCfg
