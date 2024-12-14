@@ -61,7 +61,9 @@ class TaskCrullerPretrain(TaskTrain):
         self.tokenizer = create_tokenizer(cfg.tokenizer)
         self.model = create_model(
             model_cfg,
-            pretrained='',  # FIXME pass through tags or paths for full pretrained image-text tower
+            pretrained="",
+            #pretrained='/fsx/pablo/pixparse-exps/20240225-100138-task_cruller_pretrain-model_cruller_vitL384_qk_siglip-lr_8.0e-05-b_36/checkpoints/20240225-100138-task_cruller_pretrain-model_cruller_vitL384_qk_siglip-lr_8.0e-05-b_36/checkpoint-5.pt',
+            #new_vocab_size=50267
         )
         self.loss = nn.CrossEntropyLoss(ignore_index=-100)
 
@@ -81,8 +83,10 @@ class TaskCrullerPretrain(TaskTrain):
         )
         self.vocab_size = len(self.tokenizer)
         # We need to resize the token embeddings after the model has been initialized
+        
         if newly_added_num > 0:
             self.model.text_decoder.trunk.resize_token_embeddings(len(self.tokenizer))
+        
 
         # Setup text preprocessing
         preproc_fn = preprocess_text_anno if self.text_anno_fn else preprocess_ocr_anno

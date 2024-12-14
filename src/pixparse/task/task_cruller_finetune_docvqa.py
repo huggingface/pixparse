@@ -56,9 +56,9 @@ class CollateDocVQA(BaseCollate):
         self.end_token = end_token
 
     def __call__(self, batch):
-        images = [Image.open(io.BytesIO(item["image"]['bytes'])) for item in batch]
+        #images = [Image.open(io.BytesIO(item["image"]['bytes'])) for item in batch]
+        images = [item["image"] for item in batch]
         # question/answer tokens are already present in the data
-        
         
         questions = [item["question"] for item in batch] # list of questions
         answers = [np.random.choice(item["answers"]) for item in batch] # select one answer per question
@@ -170,7 +170,7 @@ class TaskCrullerFinetuneDOCVQA(TaskTrain):
         self.collator = CollateDocVQA(
             self.tokenizer,
             self.image_preprocess_train,
-            self.task_start_token,
+            start_token=self.task_start_token,
             end_token=self.prompt_end_token,
             max_length=128  # FIXME derive from config
         )
@@ -189,6 +189,7 @@ class TaskCrullerFinetuneDOCVQA(TaskTrain):
             if resume == "latest":
                 resume = get_latest_checkpoint(resume)
             state_dict = load_checkpoint(resume)
+            print(f"Currently resuming from {resume}")
             self.load_state_dict(state_dict)
 
         self.model.text_decoder.trunk.model.decoder.embed_tokens.padding_idx = self.tokenizer.pad_token_id
@@ -205,6 +206,7 @@ class TaskCrullerFinetuneDOCVQA(TaskTrain):
         image_input = image_input.to(self.device_env.device, non_blocking=True)
         label = label.to(self.device_env.device, non_blocking=True)
         text_target = text_target.to(self.device_env.device, non_blocking=True)
+        # forward method
 
         with self.autocast():
             output = self.model(image_input, label)

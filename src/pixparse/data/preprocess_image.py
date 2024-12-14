@@ -52,6 +52,8 @@ def create_transforms(
         return nougat_transforms(**basic_args, **adv_args)
     elif name == 'basic':
         return basic_transforms(**basic_args, **adv_args)
+    elif name == 'noaugments':
+        return no_aug_transforms(**basic_args, **adv_args)
     else:
         return legacy_transforms(**basic_args)
 
@@ -74,6 +76,24 @@ def legacy_transforms(
     ])
     return pp
 
+def no_aug_transforms(
+        input_cfg: ImageInputCfg, 
+        training=True,
+        grayscale=True, 
+        fill=255,
+        **kwargs,
+        ):
+    pp = []
+    if grayscale:
+        pp += [transforms.Grayscale()]
+    
+    pp += [
+        CenterCropOrPad(input_cfg.image_size, fill=fill),
+        transforms.ToTensor(),
+        transforms.Normalize(input_cfg.image_mean, input_cfg.image_std),
+    ]
+
+    return transforms.Compose(pp)
 
 def basic_transforms(
         input_cfg: ImageInputCfg,
@@ -82,12 +102,15 @@ def basic_transforms(
         crop_margin=False,
         align_long_axis=False,
         fill=255,
+        grayscale=True,
 ):
     # an improved torchvision + custom op transforms (no albumentations)
     image_size = input_cfg.image_size
     interpolation_mode = timm.data.transforms.str_to_interp_mode(interpolation)
 
     pp = []
+    if grayscale:
+        pp += [transforms.Grayscale()]
     if crop_margin:
         assert has_cv2, 'CV2 needed to use crop margin.'
         pp += [CropMargin()]
@@ -297,6 +320,76 @@ def nougat_transforms(
     tv_pp += [AlbWrapper(alb.Compose(alb_pp))]
     return transforms.Compose(tv_pp)
 
+def prepare_metadata(text: dict, image_height: int, image_width: int) -> list:
+    metadata = []
+
+    for text, box in zip(text['text'], text['bbox']):
+        left, top, width_norm, height_norm = box
+
+        metadata.append({
+            "bbox": [left, top, left + width_norm, top + height_norm],
+            "text": text
+        })
+    
+    return metadata
+
+def revert_metadata_format(text: dict, transformed_metadata: list) -> dict:
+    updated_text = {
+        "text": [],
+        "bbox": [],
+        "poly": page.get("poly", []),
+        "score": page.get("score", [])
+    }
+
+    for item in transformed_metadata:
+        bbox = item["bbox"]
+        left, top, right, bottom = bbox
+        width_norm = right - left
+        height_norm = bottom - top
+        updated_text["text"].append(item["text"])
+        updated_text["bbox"].append([left, top, width_norm, height_norm])
+    
+    return updated_text
+
+def new_transforms(
+        input_cfg: ImageInputCfg,
+        text: text,
+        training=True,
+        interpolation='bicubic',
+        fill=255,
+        grayscale=True,
+):
+    assert has_albumentations, 'Albumentations and CV2 needed to use nougat transforms.'
+
+    # albumentations + custom opencv transforms from nougat
+    image_size = input_cfg.image_size
+    if interpolation == 'bilinear':
+        interpolation_mode = 1
+    else:
+        interpolation_mode = 2  # bicubic
+
+    tv_pp = []
+    alb_pp = []
+
+    if grayscale:
+        tv_pp += [transforms.Grayscale()]
+
+    image_height, image_width = input_cfg.image.shape[:2]
+    metadata = prepare_metadata(page, image_height, image_width)
+
+    # Custom albumentations transform
+    transform = A.Compose([A.TextImage(font_path=font_path, p=1, augmentations=["swap"], clear_bg=True, font_color = 'red', fraction_range = (0.5,0.8), font_size_fraction_range=(0.8, 0.9))])
+
+    # Apply transformation
+    transformed = transform(image=input_cfg.image, textimage_metadata=metadata)
+
+    # Retrieve overlay data
+    overlay_data = transformed["overlay_data"]
+
+    # Revert metadata format to the original
+    transformed_text = revert_metadata_format(overlay_data)
+    
+    return transformed['image'], transformed_text
 
 class AlbWrapper:
     def __init__(self, transform):

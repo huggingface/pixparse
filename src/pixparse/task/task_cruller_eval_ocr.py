@@ -212,3 +212,4 @@ class TaskCrullerEvalOCR(TaskEval):
         state_dicts = {}
         state_dicts["model"] = self.model.state_dict()
         return state_dicts
+

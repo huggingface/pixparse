@@ -65,7 +65,8 @@ class TextDecoderHf(nn.Module):
             past_key_values=None,
             past=None,
             use_cache: bool = None,
-            attention_mask: torch.Tensor = None,
+            attention_mask: torch.Tensor = None, 
+            **kwargs,
     ):
         """
         Args:
